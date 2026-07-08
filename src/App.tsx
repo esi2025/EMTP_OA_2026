@@ -3311,7 +3311,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                       <textarea
                         ref={trans1Ref}
                         rows={5}
-                        className={`w-full min-h-[120px] bg-transparent resize-y focus:outline-none ${textSizeClasses[textSize]} text-slate-800 py-2 leading-relaxed`}
+                        className={`w-full min-h-[120px] bg-transparent resize-y focus:outline-none ${textSizeClasses[textSize]} font-bold text-slate-950 py-2 leading-relaxed`}
                         placeholder="ترجمه نهایی در این بخش ظاهر خواهد شد..."
                         value={translatedText}
                         readOnly
@@ -3450,7 +3450,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                         <textarea
                           ref={trans2Ref}
                           rows={5}
-                          className={`w-full min-h-[120px] bg-transparent resize-y focus:outline-none ${textSizeClasses[textSize]} text-slate-800 py-2 leading-relaxed`}
+                          className={`w-full min-h-[120px] bg-transparent resize-y focus:outline-none ${textSizeClasses[textSize]} font-bold text-slate-950 py-2 leading-relaxed`}
                           placeholder="ترجمه موتور دوم همزمان در این بخش ظاهر می‌شود..."
                           value={comparisonTranslatedText}
                           readOnly
@@ -5966,7 +5966,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                 if (lines.length < 2) {
                   const isPersian = /[\u0600-\u06FF]/.test(content);
                   return (
-                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs whitespace-pre-wrap leading-relaxed text-xs" dir={isPersian ? "rtl" : "ltr"}>
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs whitespace-pre-wrap leading-relaxed text-xs font-bold text-slate-900" dir={isPersian ? "rtl" : "ltr"}>
                       {content}
                     </div>
                   );
