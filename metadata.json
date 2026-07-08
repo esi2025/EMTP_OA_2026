@@ -1,0 +1,10 @@
+{
+  "name": "آذرستان مترجم",
+  "description": "سامانه ترجمه تخصصی مهندسی عمران و پروژه های عمرانی شرکت عمران آذرستان",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
