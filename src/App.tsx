@@ -365,7 +365,7 @@ export default function App() {
   const [sourceLang, setSourceLang] = useState("en");
   const [targetLang, setTargetLang] = useState("fa");
   const [isAutoDetect, setIsAutoDetect] = useState(true);
-  const [selectedEngine, setSelectedEngine] = useState<string>("SeamlessM4T");
+  const [selectedEngine, setSelectedEngine] = useState<string>("GoogleCloud");
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationProgress, setTranslationProgress] = useState(0);
   const [translationStage, setTranslationStage] = useState(1);

@@ -1566,93 +1566,158 @@ const fallbackTranslate = (text: string, sourceLang: string, targetLang: string,
 
 // Helper: Google Translate Free fallback API to guarantee real high-fidelity translation when Gemini is restricted
 const fetchGoogleTranslate = async (text: string, sourceLang: string, targetLang: string, engineName: string = "Alternative-M4T"): Promise<string> => {
-  // If text is very long or has multiple paragraphs, split it by newlines or sentences to make it highly reliable and avoid URL length errors
-  const paragraphs = text.split('\n');
+  if (!text || !text.trim()) return "";
 
-  const translatedParagraphs = await Promise.all(paragraphs.map(async (para) => {
-    if (!para.trim()) {
-      return "";
+  // Split by newline so that each list item, bullet, or paragraph is translated independently to prevent skipping
+  const lines = text.split('\n');
+
+  const hosts = [
+    "translate.googleapis.com",
+    "translate.google.com",
+    "translate-a.googleapis.com"
+  ];
+
+  // Helper to translate a single line
+  const translateSingleLine = async (line: string): Promise<string> => {
+    const trimmed = line.trim();
+    if (!trimmed) return "";
+
+    let lineResult: string | null = null;
+    let lastError: any = null;
+
+    for (const host of hosts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      try {
+        const url = `https://${host}/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(trimmed)}`;
+        const response = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9"
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from ${host}`);
+        }
+        const data = await response.json();
+        if (data && data[0]) {
+          const translated = data[0].map((x: any) => x[0]).filter((s: any) => s !== null).join("");
+          if (translated && translated.trim() !== "") {
+            lineResult = translated;
+            break; // success, stop trying hosts for this line
+          }
+        }
+        throw new Error(`Invalid response format from ${host}`);
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        lastError = err;
+        console.warn(`Translation attempt via ${host} for line failed. Error:`, err.message || err);
+      }
     }
 
-    // Split sentences if paragraph is still too long (> 300 chars) to prevent query string limits and antibot blocks
-    let chunks: string[] = [];
-    if (para.length > 300) {
-      // Split by sentence terminators
-      const rawChunks = para.split(/(?<=[.?!؟؛])/);
-      let currentChunk = "";
-      for (const piece of rawChunks) {
-        if ((currentChunk + piece).length > 300) {
-          if (currentChunk.trim()) chunks.push(currentChunk);
-          currentChunk = piece;
-        } else {
-          currentChunk += piece;
-        }
-      }
-      if (currentChunk.trim()) chunks.push(currentChunk);
+    if (lineResult !== null) {
+      return lineResult;
     } else {
-      chunks = [para];
+      console.warn(`All Free Google API endpoints failed for line, utilizing dictionary fallback.`);
+      return fallbackTranslate(trimmed, sourceLang, targetLang, engineName);
+    }
+  };
+
+  // Run translations in batches of 4 in parallel to be extremely fast but respectful of rate limits
+  const translatedLines = await runInBatches(lines, translateSingleLine, 4);
+  return translatedLines.join("\n");
+};
+
+// Heuristic Summarizer as a backup to provide real content-based summaries when LLM is unavailable
+const generateHeuristicSummary = async (
+  text: string, 
+  type: 'bullets' | 'detailed' | 'short', 
+  lang: 'fa' | 'en'
+): Promise<string> => {
+  if (!text || !text.trim()) return "";
+
+  // 1. Split text into sentences
+  const rawSentences = text.split(/(?<=[.?!؟؛])\s+/);
+  const sentences = rawSentences
+    .map(s => s.trim())
+    .filter(s => s.length > 15);
+
+  if (sentences.length === 0) {
+    return text;
+  }
+
+  // 2. Score sentences based on position and key terms
+  const scored = sentences.map((sentence, idx) => {
+    let score = 0;
+
+    if (idx === 0) score += 15;
+    else if (idx === 1) score += 10;
+    else if (idx === 2) score += 5;
+
+    const keyTerms = [
+      "seek", "consent", "data", "privacy", "cookie", "personal", "user", "agreement", "allow", "partner", "store",
+      "project", "concrete", "structural", "contract", "engineering", "cost", "schedule", "rebar", "slab",
+      "پروژه", "بتن", "کارفرم", "پیمانکار", "سازه", "میلگرد", "کارگاه", "مهم", "لازم", "کنترل", "کیفیت", "رضایت"
+    ];
+
+    const sentenceLower = sentence.toLowerCase();
+    keyTerms.forEach(term => {
+      if (sentenceLower.includes(term)) {
+        score += 8;
+      }
+    });
+
+    if (sentence.length > 40 && sentence.length < 150) {
+      score += 5;
     }
 
-    const translatedChunks = await Promise.all(chunks.map(async (chunk) => {
-      if (!chunk.trim()) return "";
-      
-      const hosts = [
-        "translate.googleapis.com",
-        "translate.google.com",
-        "translate-a.googleapis.com"
-      ];
+    return { sentence, score, originalIndex: idx };
+  });
 
-      let chunkResult: string | null = null;
-      let lastError: any = null;
+  const limit = type === 'detailed' ? 4 : (type === 'bullets' ? 3 : 2);
+  const topScored = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 
-      for (const host of hosts) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000); // 6 seconds timeout per host
+  const ordered = topScored.sort((a, b) => a.originalIndex - b.originalIndex);
+  const selectedSentences = ordered.map(item => item.sentence);
 
-        try {
-          const url = `https://${host}/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(chunk)}`;
-          const response = await fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-              "Accept": "*/*",
-              "Accept-Language": "en-US,en;q=0.9"
-            },
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
+  let summaryText = "";
+  if (type === 'bullets') {
+    summaryText = selectedSentences.map(s => `• ${s}`).join("\n");
+  } else {
+    summaryText = selectedSentences.join(" ");
+  }
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status} from ${host}`);
-          }
-          const data = await response.json();
-          if (data && data[0]) {
-            const translated = data[0].map((x: any) => x[0]).join("");
-            if (translated && translated.trim() !== "") {
-              chunkResult = translated;
-              break; // successfully translated chunk, skip other hosts
-            }
-          }
-          throw new Error(`Invalid response format from ${host}`);
-        } catch (err: any) {
-          clearTimeout(timeoutId);
-          lastError = err;
-          console.warn(`Translation attempt via ${host} for chunk failed, trying next host... Error:`, err.message || err);
-        }
-      }
+  // 3. Auto-translate summary to requested target language if mismatch
+  const hasFarsi = /[\u0600-\u06FF]/.test(text);
+  
+  if (lang === 'fa' && !hasFarsi) {
+    try {
+      console.log("[Heuristic Summarizer] Translating English heuristic summary to Persian...");
+      const translatedSummary = await fetchGoogleTranslate(summaryText, 'en', 'fa', 'Heuristic-Summary');
+      return translatedSummary;
+    } catch (e) {
+      console.error("[Heuristic Summarizer] Translation failed:", e);
+      return summaryText;
+    }
+  } else if (lang === 'en' && hasFarsi) {
+    try {
+      console.log("[Heuristic Summarizer] Translating Persian heuristic summary to English...");
+      const translatedSummary = await fetchGoogleTranslate(summaryText, 'fa', 'en', 'Heuristic-Summary');
+      return translatedSummary;
+    } catch (e) {
+      console.error("[Heuristic Summarizer] Translation failed:", e);
+      return summaryText;
+    }
+  }
 
-      if (chunkResult !== null) {
-        return chunkResult;
-      } else {
-        console.warn(`All Free Google API endpoints failed for chunk, utilizing dictionary fallback. Last error:`, lastError);
-        return fallbackTranslate(chunk, sourceLang, targetLang, engineName);
-      }
-    }));
-    
-    return translatedChunks.filter(c => c !== "").join(" ");
-  }));
-
-  return translatedParagraphs.join("\n");
+  return summaryText;
 };
 
 app.post("/api/translate", async (req, res) => {
@@ -2064,10 +2129,6 @@ app.post("/api/summarize", async (req, res) => {
   const ai = getGeminiClient();
   const summaryInstruction = type === 'bullets' ? 'bullet points outline format' : (type === 'detailed' ? 'detailed exhaustive summary format' : 'short, direct key points summary');
 
-  const fallbackText = lang === 'fa' 
-    ? `[خلاصه تفصیلی شبیه‌سازی شده]:\n۱. محور اصلی سند ناظر بر لزوم رعایت کنترل کیفی بتن پیش‌تنیده در سقف لابی.\n۲. تأکید بر بازرسی و آزمون‌های غیرمخرب میلگردها.\n۳. زمان‌بندی دقیق قالب‌بندی ستون‌ها به همراه عایق‌کاری رطوبتی.`
-    : `[Simulated Abstract]:\n- Core document emphasizes pre-stressing techniques inside the primary slab.\n- Stresses structural anchor integrity of shoring systems across vertical grids.\n- Recommends C35 admixture elements to enhance tensile load limits.`;
-
   if (ai || ollamaConfig.ollamaEnabled) {
     try {
       const prompt = `You are an expert technical abstract writer. Provide a ${summaryInstruction} of the following technical engineering passage. 
@@ -2081,11 +2142,14 @@ ${text}
       const summaryText = await generateTextFlexible(prompt);
       return res.json({ success: true, summary: summaryText });
     } catch (err: any) {
-      console.warn("Flexible summarize failed, returning detailed fallback abstract:", err);
-      return res.json({ success: true, summary: fallbackText });
+      console.warn("Flexible summarize failed, falling back to heuristic summary generator:", err);
+      const heuristicSummary = await generateHeuristicSummary(text, type, lang);
+      return res.json({ success: true, summary: heuristicSummary });
     }
   } else {
-    return res.json({ success: true, summary: fallbackText });
+    // If no LLM configured/available, run the real heuristic summary generator
+    const heuristicSummary = await generateHeuristicSummary(text, type, lang);
+    return res.json({ success: true, summary: heuristicSummary });
   }
 });
 
@@ -2093,7 +2157,7 @@ ${text}
 const runInBatches = async <T, R>(
   items: T[],
   fn: (item: T) => Promise<R>,
-  batchSize: number = 8
+  batchSize: number = 2
 ): Promise<R[]> => {
   const results: R[] = [];
   for (let i = 0; i < items.length; i += batchSize) {
@@ -2292,7 +2356,7 @@ ${textContent}`;
         // Translate all paragraphs in parallel batches to prevent timeouts
         const translatedParagraphs = await runInBatches(paragraphs, p => 
           fetchGoogleTranslate(p, sourceLang, targetLang, "M4T-File")
-        , 8);
+        , 2);
 
         for (let i = 0; i < paragraphs.length; i++) {
           bilingualLines.push(paragraphs[i]);
@@ -2329,7 +2393,7 @@ ${textContent}`;
       // Translate all paragraphs in parallel batches to prevent timeouts
       const translatedParagraphs = await runInBatches(paragraphs, p => 
         fetchGoogleTranslate(p, sourceLang, targetLang, "M4T-File")
-      , 8);
+      , 2);
 
       for (let i = 0; i < paragraphs.length; i++) {
         bilingualLines.push(paragraphs[i]);
