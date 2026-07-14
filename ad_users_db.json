@@ -1,0 +1,72 @@
+[
+  {
+    "username": "SUPPORT",
+    "name": "پشتیبان سیستم (مدیریت شبکه)",
+    "email": "support@bnpp2project.local",
+    "department": "مدیریت فناوری اطلاعات",
+    "role": "Admin",
+    "active": true,
+    "lastActive": "2026-07-14T14:09:16.113Z",
+    "authorized": true,
+    "allowedIp": "",
+    "canTranslate": true,
+    "canDefineTerms": true,
+    "computerName": "PC-SUPPORT-BNPP"
+  },
+  {
+    "username": "m.esmaeili.admin",
+    "name": "مهدی اسماعیلی",
+    "email": "m.esmaeili@omran-azarestan.com",
+    "department": "مدیریت پروژه و مهندسی",
+    "role": "Admin",
+    "active": true,
+    "lastActive": "2026-07-14T14:14:43.236Z",
+    "authorized": true,
+    "allowedIp": "",
+    "canTranslate": true,
+    "canDefineTerms": true,
+    "computerName": "LOCALHOST.BNPP2PROJECT.LOCAL"
+  },
+  {
+    "username": "m.esmaeili.trans",
+    "name": "مهدی اسماعیلی",
+    "email": "m.esmaeili@omran-azarestan.com",
+    "department": "مترجم ارشد و کنترل متون",
+    "role": "Translator",
+    "active": true,
+    "lastActive": "2026-06-17T10:45:00",
+    "authorized": true,
+    "allowedIp": "",
+    "canTranslate": true,
+    "canDefineTerms": true,
+    "computerName": "PC-ESMAEILI-TRN"
+  },
+  {
+    "username": "m.esmaeili.dept",
+    "name": "مهدی اسماعیلی",
+    "email": "m.esmaeili@omran-azarestan.com",
+    "department": "دفتر فنی و سازه",
+    "role": "DeptManager",
+    "active": true,
+    "lastActive": "2026-06-17T09:30:00",
+    "authorized": true,
+    "allowedIp": "",
+    "canTranslate": true,
+    "canDefineTerms": true,
+    "computerName": "PC-ESMAEILI-MGR"
+  },
+  {
+    "username": "m.esmaeili.user",
+    "name": "مهدی اسماعیلی",
+    "email": "m.esmaeili@omran-azarestan.com",
+    "department": "کارگاه عمران پرند",
+    "role": "User",
+    "active": true,
+    "lastActive": "2026-06-17T11:20:00",
+    "authorized": true,
+    "allowedIp": "",
+    "canTranslate": true,
+    "canDefineTerms": true,
+    "computerName": "PC-ESMAEILI-USR"
+  }
+]
