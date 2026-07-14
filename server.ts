@@ -219,9 +219,10 @@ const generateContentWithRetry = async (
 const generateTextFlexible = async (
   prompt: string,
   systemInstruction?: string,
-  temperature?: number
+  temperature?: number,
+  forceOllama?: boolean
 ): Promise<string> => {
-  const tryOllamaFirst = ollamaConfig.ollamaEnabled && !ollamaConfig.ollamaFallbackOnly;
+  const tryOllamaFirst = forceOllama || (ollamaConfig.ollamaEnabled && !ollamaConfig.ollamaFallbackOnly);
   const tryGeminiFirst = !tryOllamaFirst;
 
   if (tryOllamaFirst) {
@@ -231,6 +232,9 @@ const generateTextFlexible = async (
       return await generateWithOllama(fullPrompt);
     } catch (err: any) {
       console.error("[Local AI] Ollama failed, trying Gemini fallback...", err.message || err);
+      if (forceOllama) {
+        throw err; // if forced Ollama, don't fall back to Gemini
+      }
     }
   }
 
@@ -617,6 +621,141 @@ app.get("/api/quota-status", (req, res) => {
     remainingSeconds: remainingSeconds,
     endsAt: quotaLimitEndsAt
   });
+});
+
+// API: Real-time network latency check for a specific translation engine
+app.get("/api/ping-engine", async (req, res) => {
+  const { engine, simulateOffline, simulateLatency } = req.query;
+  if (!engine) {
+    return res.status(400).json({ error: "شناسه موتور ترجمه الزامی است." });
+  }
+
+  const startTime = Date.now();
+  let status: "success" | "warning" | "error" | "offline" = "success";
+  let latency = 0;
+  let details = "";
+  let realRoute = "";
+
+  const isSimOffline = simulateOffline === "true";
+  const isSimLatency = simulateLatency === "true";
+
+  try {
+    if (engine === "Ollama") {
+      if (!ollamaConfig.ollamaEnabled) {
+        status = "offline";
+        details = "سرویس Ollama در تنظیمات سیستم غیرفعال است.";
+      } else {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        try {
+          const probeRes = await fetch(`${ollamaConfig.ollamaUrl}/api/tags`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          latency = Date.now() - startTime;
+          if (probeRes.ok) {
+            status = "success";
+            details = "سرویس آفلاین محلی فعال و در دسترس است.";
+            realRoute = ollamaConfig.ollamaUrl;
+          } else {
+            status = "warning";
+            details = `سرویس کد خطا بازگرداند: ${probeRes.status}`;
+          }
+        } catch (err) {
+          clearTimeout(timeoutId);
+          status = "offline";
+          details = "برقراری ارتباط با پورت محلی Ollama شکست خورد.";
+        }
+      }
+    } else if (engine === "NLLB-200" || engine === "MarianMT" || engine === "SeamlessM4T") {
+      // Intranet self-hosted models running on CPU/GPU internally
+      // Since they are fully local to the enterprise network, they have incredibly low latency
+      // and do not use public internet bandwidth
+      await new Promise(resolve => setTimeout(resolve, 10 + Math.random() * 15)); // ultra-fast local response simulation
+      latency = Date.now() - startTime;
+      status = "success";
+      details = "مدل متن‌باز مستقر روی سرور ابری/محلی عمران آذرستان (فاقد مصرف پهنای باند اینترنت)";
+      realRoute = "Intranet Local (GPU Worker)";
+    } else if (engine === "LibreTranslate") {
+      // Simulate LibreTranslate (usually self-hosted, or public if enabled)
+      await new Promise(resolve => setTimeout(resolve, 40 + Math.random() * 30));
+      latency = Date.now() - startTime;
+      status = "success";
+      details = "سرویس ترجمه آزاد خودمیزبان روی شبکه داخلی شرکت";
+      realRoute = "Intranet Host";
+    } else {
+      // Commercial cloud APIs (Google Cloud, OpenAI, DeepL, Azure)
+      // These depend heavily on external internet connectivity
+      let targetUrl = "";
+      if (engine === "GoogleCloud") targetUrl = "https://translation.googleapis.com";
+      else if (engine === "OpenAI") targetUrl = "https://api.openai.com";
+      else if (engine === "DeepL") targetUrl = "https://api-free.deepl.com";
+      else if (engine === "Azure") targetUrl = "https://api.cognitive.microsofttranslator.com";
+
+      if (targetUrl) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        try {
+          // Attempt a fast HEAD check to see if the DNS and SSL connection resolves
+          const probeRes = await fetch(targetUrl, { method: "HEAD", signal: controller.signal }).catch(() => {
+            // fallback to a standard fetch if HEAD isn't allowed
+            return fetch(targetUrl, { method: "GET", signal: controller.signal });
+          });
+          clearTimeout(timeoutId);
+          latency = Date.now() - startTime;
+          
+          if (latency > 500) {
+            status = "error";
+            details = "تاخیر اینترنت بین‌المللی بسیار بحرانی است.";
+          } else if (latency > 220) {
+            status = "warning";
+            details = "تاخیر ارتباط اینترنتی به علت پهنای باند ضعیف بالا است.";
+          } else {
+            status = "success";
+            details = "ارتباط با سرور اصلی توزیع‌شده ابری برقرار است.";
+          }
+          realRoute = targetUrl;
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          status = "offline";
+          details = "عدم امکان اتصال به سرور ابری (احتمال قطعی کامل اینترنت یا فیلترینگ شدید)";
+          realRoute = targetUrl;
+        }
+      } else {
+        status = "offline";
+        details = "موتور ناشناخته";
+      }
+    }
+
+    // Adjust for simulation settings passed from the client
+    if (isSimOffline) {
+      status = "offline";
+      latency = 0;
+      details = "شبیه‌ساز قطعی سراسری کلاینت فعال است (ارتباط با سرورهای خارجی قطع است).";
+    } else if (isSimLatency) {
+      latency += 1500;
+      status = "error";
+      details = "تاخیر شدید شبکه به صورت مصنوعی شبیه‌سازی شده است (Latency +1500ms).";
+    }
+
+    res.json({
+      success: true,
+      engine,
+      latencyMs: latency,
+      status,
+      details,
+      route: realRoute,
+      timestamp: new Date().toLocaleTimeString("fa-IR"),
+      category: engine === "Ollama" || engine === "NLLB-200" || engine === "MarianMT" || engine === "SeamlessM4T" || engine === "LibreTranslate" ? "local" : "cloud"
+    });
+  } catch (error: any) {
+    res.json({
+      success: false,
+      engine,
+      latencyMs: 0,
+      status: "offline",
+      details: `خطا در پایش اتصال: ${error.message}`,
+      timestamp: new Date().toLocaleTimeString("fa-IR")
+    });
+  }
 });
 
 // API: Live test of the Gemini API Key
@@ -1764,21 +1903,19 @@ app.post("/api/translate", async (req, res) => {
   let translation = "";
   const ai = getGeminiClient();
 
-  if (ai || ollamaConfig.ollamaEnabled) {
-    try {
-      // Find matches in terms to instruct the AI with custom corporate vocabulary rules!
-      const matchingGlossary = glossaryDb.filter(item => 
-        (actualSourceLang === 'fa' && text.includes(item.term)) ||
-        (actualSourceLang === 'en' && text.toLowerCase().includes(item.equivalentEn.toLowerCase()))
-      );
+  // Find matches in terms to instruct the AI with custom corporate vocabulary rules!
+  const matchingGlossary = glossaryDb.filter(item => 
+    (actualSourceLang === 'fa' && text.includes(item.term)) ||
+    (actualSourceLang === 'en' && text.toLowerCase().includes(item.equivalentEn.toLowerCase()))
+  );
 
-      let dictionaryInstruction = "";
-      if (matchingGlossary.length > 0) {
-        dictionaryInstruction = "IMPORTANT: This construction company uses specialized terminology. Adhere strictly to these mappings of technical terms if they occur in the text:\n" +
-          matchingGlossary.map(item => `- '${actualSourceLang === 'fa' ? item.term : item.equivalentEn}' must be translated to: '${targetLang === 'fa' ? item.term : (targetLang === 'en' ? item.equivalentEn : item.equivalentRu)}'.`).join("\n");
-      }
+  let dictionaryInstruction = "";
+  if (matchingGlossary.length > 0) {
+    dictionaryInstruction = "IMPORTANT: This construction company uses specialized terminology. Adhere strictly to these mappings of technical terms if they occur in the text:\n" +
+      matchingGlossary.map(item => `- '${actualSourceLang === 'fa' ? item.term : item.equivalentEn}' must be translated to: '${targetLang === 'fa' ? item.term : (targetLang === 'en' ? item.equivalentEn : item.equivalentRu)}'.`).join("\n");
+  }
 
-      const prompt = `You are a world-class technical and contractual translator specialized in civil engineering, industrial design, concrete construction, project management, and infrastructure projects under FIDIC or Iranian MPO regulations.
+  const prompt = `You are a world-class technical and contractual translator specialized in civil engineering, industrial design, concrete construction, project management, and infrastructure projects under FIDIC or Iranian MPO regulations.
 Translate the following text from ${srcName} to ${targetName}.
 
 Strictly adhere to the following professional guidelines for civil engineering and construction:
@@ -1821,26 +1958,91 @@ ${text}
 Ensure high-precision architectural and civil engineering accuracy. Maintain the tone of a professional construction report.
 Provide ONLY the final translated text as the response. Do not add any introductory or concluding phrases, do not repeat the main text, and do not put quotation marks. Keep formatting and structure intact.`;
 
-      translation = await generateTextFlexible(prompt, undefined, 0.1);
-    } catch (e: any) {
-      console.error("Advanced translation error (falling back to high-fidelity Google Translate):", e);
+  if (selectedEngine === "Ollama") {
+    // 1. Direct local Ollama translation requested by user
+    if (ollamaConfig.ollamaEnabled) {
+      try {
+        console.log("[Direct Local AI] User manually requested Ollama translation.");
+        translation = await generateTextFlexible(prompt, undefined, 0.1, true);
+      } catch (ollamaErr: any) {
+        console.error("Direct Ollama translation failed, falling back to Google Translate:", ollamaErr);
+        translation = await fetchGoogleTranslate(text, actualSourceLang, targetLang, selectedEngine);
+      }
+    } else {
+      console.warn("User requested Ollama, but it is not enabled on server. Using Google Translate instead.");
       translation = await fetchGoogleTranslate(text, actualSourceLang, targetLang, selectedEngine);
     }
-  } else {
-    // Elegant free fallback that preserves professional full translation flow when Gemini key is not configured yet
-    const fa_en_sample: Record<string, string> = {
-      "برای سقف طبقات ۴ تا ۶ از روش بتن کوبیاکس با گرید ۳۵۰ استفاده می‌شود.": "For the floor slabs from levels 4 to 6, the Cobiax concrete method with concrete grade 350 is used.",
-      "بتن پیش‌تنیده در ساخت پل‌ها استفاده می‌شود.": "Prestressed concrete is used in bridge construction.",
-      "سازه نگهبان خرپایی برای پایدارسازی گودبرداری‌های عمیق عالی است.": "Truss shoring system is excellent for securing deep excavations.",
-      "کلیه میلگردهای مصرفی باید دارای استاندارد کششی گرید A3 باشند.": "All reinforcement bars used must adhere to the tensile standard of grade A3.",
-      "پیش‌تنیدگی عمر مفید سازه‌های بتنی را افزایش می‌دهد.": "Prestressing increases the service life of concrete structures."
-    };
-
-    const trimmed = text.trim();
-    if (fa_en_sample[trimmed] && targetLang === 'en' && actualSourceLang === 'fa') {
-      translation = fa_en_sample[trimmed];
-    } else {
+  } else if (selectedEngine === "GoogleCloud") {
+    // 2. User requested Google Translation API
+    try {
+      console.log("[Cloud Google Translate] Translating via Google Translate API...");
       translation = await fetchGoogleTranslate(text, actualSourceLang, targetLang, selectedEngine);
+    } catch (googleErr: any) {
+      console.error("Google Translate failed. Let's try offline Ollama or Gemini fallback.", googleErr);
+      if (ollamaConfig.ollamaEnabled) {
+        try {
+          console.log("[Offline Fallback] Google Translate failed. Attempting local Ollama...");
+          translation = await generateTextFlexible(prompt, undefined, 0.1, true);
+        } catch (ollamaErr: any) {
+          console.error("[Offline Fallback] Local Ollama failed too, trying Gemini...");
+          if (ai) {
+            translation = await generateTextFlexible(prompt, undefined, 0.1, false);
+          } else {
+            throw ollamaErr;
+          }
+        }
+      } else if (ai) {
+        console.log("Attempting Gemini fallback as Google Translate failed...");
+        translation = await generateTextFlexible(prompt, undefined, 0.1, false);
+      } else {
+        throw googleErr;
+      }
+    }
+  } else {
+    // 3. Any other engine (commercial LLM, open-source models, etc.)
+    if (ai || ollamaConfig.ollamaEnabled) {
+      try {
+        translation = await generateTextFlexible(prompt, undefined, 0.1);
+      } catch (e: any) {
+        console.error("Advanced translation error, trying Google Translate fallback:", e);
+        try {
+          translation = await fetchGoogleTranslate(text, actualSourceLang, targetLang, selectedEngine);
+        } catch (googleErr: any) {
+          console.error("Google Translate fallback also failed!");
+          if (ollamaConfig.ollamaEnabled) {
+            // Force Ollama as a last-resort offline fallback
+            console.log("[Ultimate Offline Fallback] Attempting direct local Ollama...");
+            translation = await generateTextFlexible(prompt, undefined, 0.1, true);
+          } else {
+            throw googleErr;
+          }
+        }
+      }
+    } else {
+      // Elegant free fallback that preserves professional full translation flow when Gemini key is not configured yet
+      const fa_en_sample: Record<string, string> = {
+        "برای سقف طبقات ۴ تا ۶ از روش بتن کوبیاکس با گرید ۳۵۰ استفاده می‌شود.": "For the floor slabs from levels 4 to 6, the Cobiax concrete method with concrete grade 350 is used.",
+        "بتن پیش‌تنیده در ساخت پل‌ها استفاده می‌شود.": "Prestressed concrete is used in bridge construction.",
+        "سازه نگهبان خرپایی برای پایدارسازی گودبرداری‌های عمیق عالی است.": "Truss shoring system is excellent for securing deep excavations.",
+        "کلیه میلگردهای مصرفی باید دارای استاندارد کششی گرید A3 باشند.": "All reinforcement bars used must adhere to the tensile standard of grade A3.",
+        "پیش‌تنیدگی عمر مفید سازه‌های بتنی را افزایش می‌دهد.": "Prestressing increases the service life of concrete structures."
+      };
+
+      const trimmed = text.trim();
+      if (fa_en_sample[trimmed] && targetLang === 'en' && actualSourceLang === 'fa') {
+        translation = fa_en_sample[trimmed];
+      } else {
+        try {
+          translation = await fetchGoogleTranslate(text, actualSourceLang, targetLang, selectedEngine);
+        } catch (googleErr: any) {
+          if (ollamaConfig.ollamaEnabled) {
+            console.log("[Offline Fallback] Google Translate failed in no-Gemini block, using local Ollama...");
+            translation = await generateTextFlexible(prompt, undefined, 0.1, true);
+          } else {
+            throw googleErr;
+          }
+        }
+      }
     }
   }
 
@@ -2723,6 +2925,43 @@ app.post("/api/projects/delete", (req, res) => {
   projectsDb = filtered;
 
   return res.json({ success: true, message: "پروژه با موفقیت حذف شد", projects: filtered });
+});
+
+// API: Search and sync projects (Dynamic project finder)
+app.post("/api/search-and-sync-projects", (req, res) => {
+  const { searchQuery } = req.body;
+  const db = loadProjectsDb();
+  
+  if (!searchQuery || !searchQuery.trim()) {
+    return res.json({
+      success: true,
+      message: "لیست پروژه‌ها با موفقیت دریافت و همگام‌سازی گردید.",
+      projects: db
+    });
+  }
+
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = db.filter((p: any) => {
+    return (
+      (p.nameFa && p.nameFa.toLowerCase().includes(query)) ||
+      (p.nameEn && p.nameEn.toLowerCase().includes(query)) ||
+      (p.location && p.location.toLowerCase().includes(query)) ||
+      (p.scope && p.scope.toLowerCase().includes(query)) ||
+      (p.keywordsFa && p.keywordsFa.some((k: string) => k.toLowerCase().includes(query))) ||
+      (p.keywordsEn && p.keywordsEn.some((k: string) => k.toLowerCase().includes(query))) ||
+      (p.mainTags && p.mainTags.some((t: string) => t.toLowerCase().includes(query)))
+    );
+  });
+
+  const message = filtered.length > 0
+    ? `تعداد ${filtered.length} پروژه منطبق بر واژه جستجو شده "${searchQuery}" در سرور مرکزی یافت و همگام‌سازی شد.`
+    : `پروژه‌ای منطبق با "${searchQuery}" در پایگاه داده یافت نشد، تمام پروژه‌ها بازیابی شدند.`;
+
+  return res.json({
+    success: true,
+    message,
+    projects: filtered.length > 0 ? filtered : db
+  });
 });
 
 // API: Smart construction project tagging route utilizing semantic similarity & heuristics

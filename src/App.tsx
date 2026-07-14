@@ -64,6 +64,7 @@ import { NetworkHealthIndicator } from "./components/NetworkHealthIndicator";
 import { AdminSetupGuide } from "./components/AdminSetupGuide";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
+import { saveTerms, clearTerms, getAllTerms, getTermsCount, deleteTerm } from "./lib/indexedDb";
 
 export default function App() {
   // Primary Tabs
@@ -372,6 +373,7 @@ export default function App() {
   const [translationSeconds, setTranslationSeconds] = useState(0);
   const [detectedLanguageText, setDetectedLanguageText] = useState("");
   const [activeAdmixtureCategory, setActiveAdmixtureCategory] = useState("عمومی عمران");
+  const [hasOfflineFallback, setHasOfflineFallback] = useState(false);
   
   // Comparison Mode States
   const [isComparisonMode, setIsComparisonMode] = useState(false);
@@ -386,6 +388,7 @@ export default function App() {
   // Bulk selection and downloads in history section
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
   const [isBulkDownloadModalOpen, setIsBulkDownloadModalOpen] = useState(false);
+  const [showSttSettingsModal, setShowSttSettingsModal] = useState(false);
   const [bulkDownloadFormat, setBulkDownloadFormat] = useState<"csv" | "zip">("csv");
 
   // Speech to Text States
@@ -492,6 +495,15 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
   const [glossaryErrorMsg, setGlossaryErrorMsg] = useState("");
   const [editingTermId, setEditingTermId] = useState<string | null>(null);
 
+  // IndexedDB Offline Glossary Caching States
+  const [offlineCachedCount, setOfflineCachedCount] = useState(0);
+  const [isOfflineModeActive, setIsOfflineModeActive] = useState(false);
+  const [offlineSelectedCategory, setOfflineSelectedCategory] = useState("all");
+  const [offlineSelectedProject, setOfflineSelectedProject] = useState("all");
+  const [isCachingInProgress, setIsCachingInProgress] = useState(false);
+  const [offlineTerms, setOfflineTerms] = useState<GlossaryTerm[]>([]);
+  const [offlineSearchTerm, setOfflineSearchTerm] = useState("");
+
   // System Engines List State
   const [engines, setEngines] = useState<EngineConfig[]>([
     { id: "NLLB-200", name: "Meta NLLB-200", category: "open-source", enabled: true, priority: 1 },
@@ -500,12 +512,85 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
     { id: "LibreTranslate", name: "LibreTranslate", category: "open-source", enabled: false, priority: 4 },
     { id: "GoogleCloud", name: "Google Translation API", category: "commercial", enabled: true, priority: 1 },
     { id: "OpenAI", name: "OpenAI GPT-4o Agentic", category: "commercial", enabled: true, priority: 2 },
+    { id: "Ollama", name: "Ollama (سرویس آفلاین محلی)", category: "open-source", enabled: true, priority: 5 },
     { id: "DeepL", name: "DeepL Pro", category: "commercial", enabled: false, priority: 3 },
     { id: "Azure", name: "Microsoft Azure Translator", category: "commercial", enabled: false, priority: 4 }
   ]);
 
   // Analytics State
   const [analytics, setAnalytics] = useState<any>(null);
+  const [isProbingEngines, setIsProbingEngines] = useState(false);
+  const [engineLatencies, setEngineLatencies] = useState<Record<string, {
+    latencyMs: number;
+    status: "success" | "warning" | "error" | "offline";
+    details: string;
+    route: string;
+    timestamp: string;
+    category: string;
+    history: number[];
+  }>>({
+    "NLLB-200": { latencyMs: 8, status: "success", details: "مدل متن‌باز مستقر روی سرور ابری/محلی عمران آذرستان (فاقد مصرف پهنای باند اینترنت)", route: "Intranet Local (GPU Worker)", timestamp: "--:--:--", category: "local", history: [8, 10, 7, 9, 8] },
+    "MarianMT": { latencyMs: 6, status: "success", details: "مدل متن‌باز مستقر روی سرور ابری/محلی عمران آذرستان (فاقد مصرف پهنای باند اینترنت)", route: "Intranet Local (GPU Worker)", timestamp: "--:--:--", category: "local", history: [6, 7, 5, 6, 6] },
+    "SeamlessM4T": { latencyMs: 9, status: "success", details: "مدل متن‌باز مستقر روی سرور ابری/محلی عمران آذرستان (فاقد مصرف پهنای باند اینترنت)", route: "Intranet Local (GPU Worker)", timestamp: "--:--:--", category: "local", history: [9, 12, 11, 8, 9] },
+    "LibreTranslate": { latencyMs: 45, status: "success", details: "سرویس ترجمه آزاد خودمیزبان روی شبکه داخلی شرکت", route: "Intranet Host", timestamp: "--:--:--", category: "local", history: [45, 50, 42, 48, 45] },
+    "GoogleCloud": { latencyMs: 120, status: "success", details: "ارتباط با سرور اصلی توزیع‌شده ابری برقرار است.", route: "https://translation.googleapis.com", timestamp: "--:--:--", category: "cloud", history: [120, 115, 130, 125, 120] },
+    "OpenAI": { latencyMs: 210, status: "success", details: "ارتباط با سرور اصلی توزیع‌شده ابری برقرار است.", route: "https://api.openai.com", timestamp: "--:--:--", category: "cloud", history: [210, 205, 220, 215, 210] },
+    "Ollama": { latencyMs: 12, status: "success", details: "سرویس آفلاین محلی فعال و در دسترس است.", route: "http://localhost:11434", timestamp: "--:--:--", category: "local", history: [12, 15, 14, 11, 12] },
+    "DeepL": { latencyMs: 180, status: "success", details: "ارتباط با سرور اصلی توزیع‌شده ابری برقرار است.", route: "https://api-free.deepl.com", timestamp: "--:--:--", category: "cloud", history: [180, 190, 175, 185, 180] },
+    "Azure": { latencyMs: 240, status: "warning", details: "تاخیر ارتباط اینترنتی به علت پهنای باند ضعیف بالا است.", route: "https://api.cognitive.microsofttranslator.com", timestamp: "--:--:--", category: "cloud", history: [240, 250, 235, 245, 240] }
+  });
+
+  const probeSingleEngine = async (engineId: string, silent = false) => {
+    try {
+      const simulateOffline = (window as any).SIMULATE_OFFLINE || false;
+      const simulateLatency = (window as any).SIMULATE_LATENCY || false;
+      const res = await fetch(`/api/ping-engine?engine=${engineId}&simulateOffline=${simulateOffline}&simulateLatency=${simulateLatency}`);
+      if (res.ok) {
+        const data = await res.json();
+        setEngineLatencies(prev => {
+          const currentHistory = prev[engineId]?.history || [];
+          const newHistory = [...currentHistory, data.latencyMs].slice(-10);
+          return {
+            ...prev,
+            [engineId]: {
+              latencyMs: data.latencyMs,
+              status: data.status,
+              details: data.details,
+              route: data.route,
+              timestamp: data.timestamp,
+              category: data.category,
+              history: newHistory
+            }
+          };
+        });
+        if (!silent) {
+          addSystemLog(`📡 پینگ موتور [${engineId}] با موفقیت انجام شد: ${data.latencyMs}ms (${data.status === 'success' ? 'ایده‌آل' : data.status === 'warning' ? 'تاخیر بالا' : data.status === 'error' ? 'اختلال' : 'آفلاین'})`);
+        }
+        return data;
+      }
+    } catch (err: any) {
+      console.error(`Failed to ping engine ${engineId}:`, err);
+    }
+  };
+
+  const probeAllEngines = async () => {
+    if (isProbingEngines) return;
+    setIsProbingEngines(true);
+    addSystemLog("⚡ فرآیند پایش همزمان کیفیت اتصال تمام موتورهای ترجمه آغاز شد...");
+    try {
+      await Promise.all(
+        engines.map(async (eng) => {
+          await probeSingleEngine(eng.id, true);
+        })
+      );
+      addSystemLog("✅ پایش کیفیت شبکه موتورهای ترجمه با موفقیت تکمیل شد. نتایج در داشبورد مانیتورینگ شبکه ثبت گردید.");
+    } catch (err: any) {
+      console.error("Failed to probe all engines:", err);
+    } finally {
+      setIsProbingEngines(false);
+    }
+  };
+
   const [translationHistory, setTranslationHistory] = useState<TranslationRecord[]>([]);
   const [historyProjectFilter, setHistoryProjectFilter] = useState<string>("all");
   const [historySearchQuery, setHistorySearchQuery] = useState<string>("");
@@ -602,6 +687,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
   // Fetch initial Glossary and History
   useEffect(() => {
     fetchGlossary();
+    syncOfflineGlossaryState();
     fetchHistory();
     fetchAnalytics();
     fetchProjects();
@@ -615,6 +701,15 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
       `[10:48:12] پشتیبان‌گیری پشته دیتابیس عمران آذرستان با موفقیت در آدرس شبکه انجام شد.`,
       `[09:15:30] تعداد ۱۹ کاربران به صورت متقارن به وب‌سرور متصل گردیدند.`
     ]);
+  }, []);
+
+  // Real-time network latency dashboard background polling
+  useEffect(() => {
+    probeAllEngines();
+    const intervalId = setInterval(() => {
+      probeAllEngines();
+    }, 25000); // Poll every 25 seconds
+    return () => clearInterval(intervalId);
   }, []);
 
   // Sync user change logs
@@ -948,6 +1043,69 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
     }
   };
 
+  const syncOfflineGlossaryState = async () => {
+    try {
+      const count = await getTermsCount();
+      setOfflineCachedCount(count);
+      const terms = await getAllTerms();
+      setOfflineTerms(terms);
+    } catch (e) {
+      console.error("IndexedDB load error:", e);
+    }
+  };
+
+  const handleOfflineCacheSelectedSubset = async () => {
+    setIsCachingInProgress(true);
+    addSystemLog("آغاز فرآیند ذخیره‌سازی آفلاین و آماده‌سازی واژه‌نامه برای کارگاه ساختمانی...");
+    
+    try {
+      // Filter subset of glossary terms
+      const filtered = glossary.filter((item) => {
+        const categoryMatch = 
+          offlineSelectedCategory === "all" || 
+          item.category === offlineSelectedCategory || 
+          item.department === offlineSelectedCategory;
+          
+        const projectMatch = 
+          offlineSelectedProject === "all" || 
+          item.project === offlineSelectedProject;
+          
+        return categoryMatch && projectMatch;
+      });
+
+      if (filtered.length === 0) {
+        alert("هیچ واژه‌ای با فیلترهای انتخابی شما در دیتابیس مرکزی یافت نشد تا ذخیره شود.");
+        setIsCachingInProgress(false);
+        return;
+      }
+
+      // Save to IndexedDB
+      await saveTerms(filtered);
+      await syncOfflineGlossaryState();
+      
+      addSystemLog(`تعداد ${filtered.length} واژه تخصصی با موفقیت در پایگاه داده محلی IndexedDB مرورگر برای استفاده آفلاین در کارگاه ذخیره شد.`);
+      alert(`موفقیت‌آمیز: تعداد ${filtered.length} واژه مربوط به دپارتمان "${offlineSelectedCategory}" و پروژه "${offlineSelectedProject}" با موفقیت در حافظه مرورگر برای شرایط بدون اینترنت ذخیره شدند.`);
+    } catch (e: any) {
+      addSystemLog(`خطا در ذخیره‌سازی آفلاین: ${e.message}`);
+      alert(`خطا در ذخیره‌سازی: ${e.message}`);
+    } finally {
+      setIsCachingInProgress(false);
+    }
+  };
+
+  const handleClearOfflineCache = async () => {
+    if (window.confirm("آیا از حذف کامل واژه‌های ذخیره شده آفلاین از مرورگر اطمینان دارید؟")) {
+      try {
+        await clearTerms();
+        await syncOfflineGlossaryState();
+        addSystemLog("حافظه کش آفلاین واژه‌نامه (IndexedDB) با موفقیت پاکسازی شد.");
+        alert("حافظه کش آفلاین با موفقیت پاکسازی شد.");
+      } catch (e: any) {
+        alert(`خطا در پاکسازی کش: ${e.message}`);
+      }
+    }
+  };
+
   const fetchArchivedFiles = async (search?: string) => {
     setIsFetchingArchive(true);
     try {
@@ -1052,6 +1210,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
     setIsTranslating(true);
     setEngineOneRating(0);
     setEngineTwoRating(0);
+    setHasOfflineFallback(false);
     
     if (isComparisonMode) {
       addSystemLog(`درخواست ترجمه همزمان مقایسه‌ای با موتورهای ${selectedEngine} و ${comparisonEngine} ثبت شد...`);
@@ -1098,6 +1257,9 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
             body: JSON.stringify(payloadA),
             onLog: addSystemLog,
             endpointLabel: `موتور اول [${selectedEngine}] (Translate API)`
+          }).catch(err => {
+            console.warn("fetchWithRetry A rejected:", err);
+            return { ok: false, status: 503, json: async () => ({ error: err.message }) } as any;
           }),
           fetchWithRetry(endpointUrl, {
             method: "POST",
@@ -1105,6 +1267,9 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
             body: JSON.stringify(payloadB),
             onLog: addSystemLog,
             endpointLabel: `موتور دوم [${comparisonEngine}] (Translate API)`
+          }).catch(err => {
+            console.warn("fetchWithRetry B rejected:", err);
+            return { ok: false, status: 503, json: async () => ({ error: err.message }) } as any;
           })
         ]);
 
@@ -1112,15 +1277,13 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
           url: endpointUrl,
           status: resA.status,
           statusText: resA.statusText,
-          ok: resA.ok,
-          headers: Array.from(resA.headers.entries())
+          ok: resA.ok
         });
         console.log(`[Lifecycle - Translate (B)] [2. Response Received]`, {
           url: endpointUrl,
           status: resB.status,
           statusText: resB.statusText,
-          ok: resB.ok,
-          headers: Array.from(resB.headers.entries())
+          ok: resB.ok
         });
 
         if (resA.ok) {
@@ -1143,7 +1306,33 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
             statusCode: statusA,
             errorPayload: errA
           });
-          setTranslatedText(`[خطا در موتور اول]: ارتباط میسر نشد (کد: ${statusA}).`);
+
+          // Fallback Engine 1 to Ollama if it failed with 4xx or 5xx and wasn't Ollama
+          if (statusA >= 400 && selectedEngine !== "Ollama") {
+            addSystemLog(`خطای سرور اول (کد: ${statusA}). در حال انتقال خودکار به پردازشگر آفلاین Ollama...`);
+            setHasOfflineFallback(true);
+            try {
+              const fallbackPayloadA = { ...payloadA, engine: "Ollama" };
+              const fallbackResA = await fetchWithRetry(endpointUrl, {
+                method: "POST",
+                headers: requestHeaders,
+                body: JSON.stringify(fallbackPayloadA),
+                onLog: addSystemLog,
+                endpointLabel: `موتور پشتیبان آفلاین اول [Ollama] (Translate API)`
+              });
+              if (fallbackResA.ok) {
+                const fallbackDataA = await fallbackResA.json();
+                setTranslatedText(fallbackDataA.translatedText);
+                addSystemLog(`ترجمه موتور اول با موفقیت توسط پردازشگر آفلاین Ollama بازسازی شد.`);
+              } else {
+                setTranslatedText(`[خطا در موتور اول و پشتیبان آفلاین Ollama (کد خطا: ${fallbackResA.status})]`);
+              }
+            } catch (fbErr: any) {
+              setTranslatedText(`[خطا در موتور اول و پشتیبان آفلاین Ollama: ${fbErr.message}]`);
+            }
+          } else {
+            setTranslatedText(`[خطا در موتور اول]: ارتباط میسر نشد (کد: ${statusA}).`);
+          }
         }
 
         if (resB.ok) {
@@ -1209,8 +1398,7 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
           url: endpointUrl,
           status: response.status,
           statusText: response.statusText,
-          ok: response.ok,
-          headers: Array.from(response.headers.entries())
+          ok: response.ok
         });
 
         if (response.ok) {
@@ -1236,6 +1424,35 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
             statusCode: status,
             errorPayload: err
           });
+
+          // Fallback to Ollama if status >= 400 and selectedEngine is not Ollama
+          if (status >= 400 && selectedEngine !== "Ollama") {
+            addSystemLog(`خطای سرور اصلی (کد: ${status}). تلاش برای ترجمه با پردازشگر آفلاین پشتیبان Ollama...`);
+            setHasOfflineFallback(true);
+            
+            const fallbackPayload = { ...payload, engine: "Ollama" };
+            const fallbackResponse = await fetchWithRetry(endpointUrl, {
+              method: "POST",
+              headers: requestHeaders,
+              body: JSON.stringify(fallbackPayload),
+              onLog: addSystemLog,
+              endpointLabel: `موتور پشتیبان آفلاین [Ollama] (Translate API)`
+            });
+            
+            if (fallbackResponse.ok) {
+              const fallbackData = await fallbackResponse.json();
+              setTranslatedText(fallbackData.translatedText);
+              addSystemLog(`ترجمه با موفقیت توسط موتور آفلاین Ollama انجام شد.`);
+              fetchHistory();
+              fetchAnalytics();
+              return;
+            } else {
+              const fbStatus = fallbackResponse.status;
+              const fbErr = await fallbackResponse.json().catch(() => ({ error: "پاسخ نامعتبر" }));
+              throw new Error(`خطا در موتور اصلی (${status}) و موتور پشتیبان آفلاین Ollama (${fbStatus}): ${fbErr.error || "عدم ارتباط"}`);
+            }
+          }
+
           throw new Error(err.error || `خطای نامشخص در ترجمه (کد: ${status})`);
         }
       } catch (e: any) {
@@ -1244,6 +1461,33 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
           errorStack: e.stack,
           errorRaw: e
         });
+
+        // Network/other exceptions fallback to Ollama
+        if (selectedEngine !== "Ollama" && !hasOfflineFallback) {
+          try {
+            addSystemLog(`عدم دسترسی به شبکه یا سرور اصلی (${e.message}). در حال تلاش برای ترجمه آفلاین پشتیبان با Ollama...`);
+            setHasOfflineFallback(true);
+            const fallbackPayload = { ...payload, engine: "Ollama" };
+            const fallbackResponse = await fetchWithRetry(endpointUrl, {
+              method: "POST",
+              headers: requestHeaders,
+              body: JSON.stringify(fallbackPayload),
+              onLog: addSystemLog,
+              endpointLabel: `موتور پشتیبان آفلاین [Ollama] (Translate API)`
+            });
+            if (fallbackResponse.ok) {
+              const fallbackData = await fallbackResponse.json();
+              setTranslatedText(fallbackData.translatedText);
+              addSystemLog(`ترجمه با موفقیت توسط موتور آفلاین Ollama بازسازی شد.`);
+              fetchHistory();
+              fetchAnalytics();
+              return;
+            }
+          } catch (fbErr: any) {
+            console.error("Ollama fallback exception:", fbErr);
+          }
+        }
+
         addSystemLog(`خطا در ترجمه: ${e.message}`);
         setTranslatedText(`[خطا]: ارتباط با موتور هوشمند میسر نشد. لطفا پس از پیکربندی کامل سرویس یا بررسی توکن ارتباطی اقدام کنید.`);
       } finally {
@@ -1659,8 +1903,13 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SpeechRecognition) {
         setIsDictating(false);
-        setSttProgressMessage("عدم موفقیت در دریافت صدا (تشخیص گفتار توسط مرورگر شما پشتیبانی نمی‌شود)");
-        addSystemLog("سیستم تشخیص گفتار مرورگر پیدا نشد.");
+        if (!window.isSecureContext) {
+          setSttProgressMessage("عدم موفقیت در دریافت صدا (تشخیص گفتار در بستر ناامن HTTP مسدود است. لطفاً از HTTPS استفاده کنید یا در آدرس chrome://flags استثنا تعریف کنید)");
+          addSystemLog("سیستم تشخیص گفتار به علت استفاده از پروتکل غیرامن HTTP مسدود است.");
+        } else {
+          setSttProgressMessage("عدم موفقیت در دریافت صدا (تشخیص گفتار توسط مرورگر شما پشتیبانی نمی‌شود)");
+          addSystemLog("سیستم تشخیص گفتار مرورگر پیدا نشد.");
+        }
         return;
       }
 
@@ -1712,7 +1961,11 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
           addSystemLog(`خطای میکروفون تشخیص گفتار: ${event.error}`);
           setIsDictating(false);
           if (event.error === "not-allowed") {
-            setSttProgressMessage("عدم موفقیت در دریافت صدا (دسترسی به میکروفون داده نشده است. لطفا دسترسی مرورگر را بررسی نمایید یا برنامه را در تب جدید باز کنید)");
+            if (!window.isSecureContext) {
+              setSttProgressMessage("عدم موفقیت در دریافت صدا (دسترسی به میکروفون در بستر ناامن HTTP توسط مرورگر مسدود شده است. لطفاً از HTTPS استفاده کنید)");
+            } else {
+              setSttProgressMessage("عدم موفقیت در دریافت صدا (دسترسی به میکروفون داده نشده است. لطفا دسترسی مرورگر را بررسی نمایید یا برنامه را در تب جدید باز کنید)");
+            }
           } else {
             setSttProgressMessage(`عدم موفقیت در دریافت صدا (کد خطا: ${event.error || "نامشخص"})`);
           }
@@ -1793,7 +2046,11 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
         const transcript = event.results[0][0].transcript;
         if (transcript) {
           const cleanedText = transcript.trim().replace(/\.$/, "");
-          setSearchTerm(cleanedText);
+          if (isOfflineModeActive) {
+            setOfflineSearchTerm(cleanedText);
+          } else {
+            setSearchTerm(cleanedText);
+          }
           setIsGlossaryDictating(false);
           setGlossarySttFeedback("");
           addSystemLog(`واژه جستجوی صوتی دریافت شد: "${cleanedText}"`);
@@ -3028,39 +3285,97 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                         {isComparisonMode ? "حالت مقایسه دو موتور (فعال)" : "سوئیچ به حالت مقایسه‌ای"}
                       </button>
 
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-400 font-medium">
-                          {isComparisonMode ? "موتور اول:" : "انتخاب موتور ترجمه:"}
-                        </span>
-                        <select 
-                          className="bg-brand-light border border-slate-200 rounded-lg text-xs p-2 text-brand-primary font-bold focus:outline-none"
-                          value={selectedEngine}
-                          onChange={(e) => setSelectedEngine(e.target.value)}
-                        >
-                          {engines.filter(eng => eng.enabled).map(eng => (
-                            <option key={eng.id} value={eng.id}>
-                              {eng.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {isComparisonMode && (
-                        <div className="flex items-center gap-2 animate-fade-in">
-                          <span className="text-xs text-slate-400 font-medium">موتور دوم:</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 font-medium">
+                            {isComparisonMode ? "موتور اول:" : "انتخاب موتور ترجمه:"}
+                          </span>
                           <select 
-                            className="bg-amber-50 border border-amber-200 rounded-lg text-xs p-2 text-amber-700 font-bold focus:outline-none"
-                            value={comparisonEngine}
-                            onChange={(e) => setComparisonEngine(e.target.value)}
+                            className="bg-brand-light border border-slate-200 rounded-lg text-xs p-2 text-brand-primary font-bold focus:outline-none"
+                            value={selectedEngine}
+                            onChange={(e) => setSelectedEngine(e.target.value)}
                           >
-                            {engines.filter(eng => eng.enabled).map(eng => (
-                              <option key={eng.id} value={eng.id}>
-                                {eng.name}
-                              </option>
-                            ))}
+                            {engines.filter(eng => eng.enabled).map(eng => {
+                              const lat = engineLatencies[eng.id]?.latencyMs;
+                              const isOffline = engineLatencies[eng.id]?.status === "offline";
+                              const latencyText = isOffline ? "آفلاین" : (lat !== undefined ? `${lat}ms` : "");
+                              return (
+                                <option key={eng.id} value={eng.id}>
+                                  {eng.name} {latencyText ? `(${latencyText})` : ""}
+                                </option>
+                              );
+                            })}
                           </select>
                         </div>
-                      )}
+
+                        {isComparisonMode && (
+                          <div className="flex items-center gap-2 animate-fade-in">
+                            <span className="text-xs text-slate-400 font-medium">موتور دوم:</span>
+                            <select 
+                              className="bg-amber-50 border border-amber-200 rounded-lg text-xs p-2 text-amber-700 font-bold focus:outline-none"
+                              value={comparisonEngine}
+                              onChange={(e) => setComparisonEngine(e.target.value)}
+                            >
+                              {engines.filter(eng => eng.enabled).map(eng => {
+                                const lat = engineLatencies[eng.id]?.latencyMs;
+                                const isOffline = engineLatencies[eng.id]?.status === "offline";
+                                const latencyText = isOffline ? "آفلاین" : (lat !== undefined ? `${lat}ms` : "");
+                                return (
+                                  <option key={eng.id} value={eng.id}>
+                                    {eng.name} {latencyText ? `(${latencyText})` : ""}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Live QoS Status Pill */}
+                        {(() => {
+                          const activeLat = engineLatencies[selectedEngine];
+                          if (!activeLat) return null;
+                          let pillColor = "bg-slate-100 text-slate-700 border-slate-200";
+                          let statusText = "نامشخص";
+                          if (activeLat.status === "success") {
+                            pillColor = "bg-emerald-50 text-emerald-700 border-emerald-200 animate-pulse";
+                            statusText = `عالی (${activeLat.latencyMs}ms)`;
+                          } else if (activeLat.status === "warning") {
+                            pillColor = "bg-amber-50 text-amber-700 border-amber-200";
+                            statusText = `تاخیر متوسط (${activeLat.latencyMs}ms)`;
+                          } else if (activeLat.status === "error") {
+                            pillColor = "bg-rose-50 text-rose-700 border-rose-200";
+                            statusText = `تاخیر شدید (${activeLat.latencyMs}ms)`;
+                          } else if (activeLat.status === "offline") {
+                            pillColor = "bg-rose-100 text-rose-800 border-rose-300 animate-pulse";
+                            statusText = "قطع کامل ارتباط";
+                          }
+
+                          return (
+                            <button
+                              onClick={() => {
+                                setActiveTab("analytics");
+                                setTimeout(() => {
+                                  const element = document.getElementById("engine-latency-dashboard");
+                                  if (element) {
+                                    element.scrollIntoView({ behavior: "smooth" });
+                                    // Highlight it with a temporary border style
+                                    element.classList.add("ring-4", "ring-indigo-500/20");
+                                    setTimeout(() => {
+                                      element.classList.remove("ring-4", "ring-indigo-500/20");
+                                    }, 2000);
+                                  }
+                                }, 100);
+                              }}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black border transition-all hover:brightness-95 cursor-pointer ${pillColor}`}
+                              title="مشاهده داشبورد جامع مانیتورینگ شبکه و پینگ موتورها"
+                              type="button"
+                            >
+                              <Activity className="h-3 w-3" />
+                              <span>تاخیر زنده موتور فعال: {statusText}</span>
+                            </button>
+                          );
+                        })()}
+                      </div>
 
                       {isComparisonMode && (
                         <button
@@ -3162,10 +3477,34 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                             {isDictating ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
                             {isDictating ? "پایان ضبط..." : "املا گفتاری (STT)"}
                           </button>
+
+                          <button
+                            onClick={() => setShowSttSettingsModal(true)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 cursor-pointer shadow-xs"
+                            title="تنظیمات و راه‌اندازی میکروفون روی ویندوز سرور"
+                            type="button"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                            <span>تنظیمات میکروفون</span>
+                          </button>
                           
                           <span className="text-[10px] text-slate-400 bg-amber-50/75 border border-amber-200/45 px-2 py-0.5 rounded-lg">
                             💡 در صورت بروز خطا در دسترسی به میکروفون، دکمه «باز کردن در تب جدید» بالای صفحه مرورگر را بفشارید.
                           </span>
+
+                          {!window.isSecureContext && (
+                            <button
+                              onClick={() => setShowSttSettingsModal(true)}
+                              className="w-full text-right text-[10px] text-rose-700 bg-rose-50 border border-rose-200/60 p-2.5 rounded-xl leading-relaxed mt-2 hover:bg-rose-100/50 transition-all flex items-center justify-between gap-2 cursor-pointer group"
+                              dir="rtl"
+                              type="button"
+                            >
+                              <span>
+                                ⚠️ <b>محدودیت امنیت گوگل کروم (اجرا روی آدرس ناامن HTTP):</b> به علت استفاده از آدرس ناامن HTTP، مرورگر شما دسترسی میکروفون را مسدود کرده است. برای <b>مشاهده راهنمای گام‌به‌گام فعالسازی HTTPS یا تنظیمات فچم مرورگر (Chrome Flags)</b> کلیک کنید.
+                              </span>
+                              <ChevronRight className="h-4 w-4 text-rose-400 shrink-0 transform group-hover:translate-x-1 transition-transform" />
+                            </button>
+                          )}
                         </div>
 
                         <button 
@@ -3300,11 +3639,19 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                     {/* Target Translation Textarea - Engine 1 */}
                     <div className={`flex flex-col rounded-xl p-3 border transition-all ${isComparisonMode ? 'bg-indigo-50/20 border-indigo-200' : 'bg-slate-50 border-slate-200'}`}>
                       <div className={`flex justify-between items-center pb-2 border-b text-[12px] font-black ${isComparisonMode ? 'border-indigo-100 text-indigo-900' : 'border-slate-100 text-slate-900'}`}>
-                        <span>
-                          {isComparisonMode 
-                            ? `ترجمه موتور اول (${engines.find(e => e.id === selectedEngine)?.name || selectedEngine})` 
-                            : `ترجمه شده (${detectedLanguageText || "هدف"})`}
-                        </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>
+                            {isComparisonMode 
+                              ? `ترجمه موتور اول (${engines.find(e => e.id === selectedEngine)?.name || selectedEngine})` 
+                              : `ترجمه شده (${detectedLanguageText || "هدف"})`}
+                          </span>
+                          {hasOfflineFallback && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white animate-pulse" dir="rtl">
+                              <span className="w-1.5 h-1.5 bg-white rounded-full"></span>
+                              Fallback to Offline Mode (پشتیبان آفلاین Ollama)
+                            </span>
+                          )}
+                        </div>
                         <span>{translatedText.length} کاراکتر</span>
                       </div>
                       
@@ -4672,8 +5019,9 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
           {activeTab === "glossary" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              {/* Add New Dictionary Term (RBAC protected) */}
-              <div id="add-term-form" className="bg-white rounded-2xl shadow-md border border-slate-100 p-5 h-fit">
+              <div className="space-y-6">
+                {/* Add New Dictionary Term (RBAC protected) */}
+                <div id="add-term-form" className="bg-white rounded-2xl shadow-md border border-slate-100 p-5 h-fit">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
                   <div className="flex items-center gap-2">
                     <Database className="h-5 w-5 text-brand-primary" />
@@ -4825,13 +5173,134 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                 </form>
               </div>
 
+              {/* IndexedDB Offline Cache Control Panel */}
+              <div id="offline-cache-manager" className="bg-white rounded-2xl shadow-md border border-slate-100 p-5 h-fit text-right">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+                  <HardDrive className="h-5 w-5 text-brand-primary" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">آفلاین‌سازی واژه‌نامه (کارگاه ساختمانی)</h3>
+                    <p className="text-[10px] text-slate-400">ذخیره‌سازی واژه‌ها روی مرورگر با IndexedDB</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  {/* Offline Status indicator */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">وضعیت پایگاه داده محلی:</span>
+                      {offlineCachedCount > 0 ? (
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-black flex items-center gap-1">
+                          <Check className="h-3 w-3" /> دارای {offlineCachedCount} واژه کش شده
+                        </span>
+                      ) : (
+                        <span className="bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded text-[10px] font-bold">
+                          خالی (بدون حافظه محلی)
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">حالت شبیه‌ساز قطع اینترنت کارگاه:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (offlineCachedCount === 0 && !isOfflineModeActive) {
+                            alert("ابتدا باید حداقل یک دپارتمان یا زیرمجموعه از واژه‌ها را جهت استفاده آفلاین کش کنید.");
+                            return;
+                          }
+                          setIsOfflineModeActive(!isOfflineModeActive);
+                          addSystemLog(`حالت آفلاین دیتابیس واژه‌نامه محلی توسط کاربر ${!isOfflineModeActive ? "فعال" : "غیرفعال"} شد.`);
+                        }}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all border ${
+                          isOfflineModeActive 
+                            ? "bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200 cursor-pointer" 
+                            : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer"
+                        }`}
+                      >
+                        {isOfflineModeActive ? "⚠️ قطع اینترنت (آفلاین فعال)" : "اتصال آنلاین به سرور"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Subset Filters */}
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block mb-1 font-bold text-slate-600">۱. فیلتر دپارتمان جهت آفلاین‌سازی:</label>
+                      <select
+                        className="w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:outline-none"
+                        value={offlineSelectedCategory}
+                        onChange={(e) => setOfflineSelectedCategory(e.target.value)}
+                      >
+                        <option value="all">همه دپارتمان‌ها (کل واژه‌نامه)</option>
+                        <option value="سازه">سازه و بتن</option>
+                        <option value="ژئوتکنیک">ژئوتکنیک و تونل</option>
+                        <option value="سیویل">سیویل و تاسیسات</option>
+                        <option value="ماشین‌آلات">ماشین آلات سنگین</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block mb-1 font-bold text-slate-600">۲. فیلتر بر اساس پروژه ساختمانی:</label>
+                      <select
+                        className="w-full p-2 border border-slate-200 rounded-lg bg-slate-50 focus:outline-none text-right"
+                        value={offlineSelectedProject}
+                        onChange={(e) => setOfflineSelectedProject(e.target.value)}
+                      >
+                        <option value="all">همه پروژه‌های فعال عمران آذرستان</option>
+                        {Array.from(new Set(glossary.map((g) => g.project).filter(Boolean))).map((projName) => (
+                          <option key={projName} value={projName}>پروژه {projName}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Cache action buttons */}
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleOfflineCacheSelectedSubset}
+                      disabled={isCachingInProgress}
+                      className="py-2.5 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-xl font-bold text-[11px] shadow hover:shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed"
+                    >
+                      {isCachingInProgress ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" /> در حال کش...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-3.5 w-3.5" /> دانلود و کش محلی
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleClearOfflineCache}
+                      className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-bold text-[11px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> پاکسازی کش محلی
+                    </button>
+                  </div>
+
+                  {/* Explanatory text block */}
+                  <div className="text-[10px] text-slate-500 leading-relaxed border-t border-slate-100 pt-3 space-y-1">
+                    <span className="font-extrabold text-slate-700">💡 راهنمای کارگاه:</span>
+                    <p>
+                      در این ماژول می‌توانید زیرمجموعه اطلاعات مورد نظر را مستقیماً در بستر بسیار امن <strong>IndexedDB مرورگر</strong> ذخیره نموده و در زمان قطع اینترنت در اعماق تونل‌ها یا فونداسیون پروژه‌های دورافتاده، واژه‌نامه را مرور و جستجو فرمایید.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
               {/* Glossary List Browser columns */}
               <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-5 lg:col-span-2">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-slate-100 gap-4 mb-4">
                   <div className="flex items-center gap-2">
                     <BookOpen className="h-5 w-5 text-brand-primary" />
                     <h3 className="text-sm font-bold text-slate-800 text-right">
-                      جستجو و یکپارچه‌سازی اصطلاحات تخصصی ({glossary.length} اصطلاح فعال)
+                      {isOfflineModeActive 
+                        ? `پایگاه داده آفلاین کارگاه (${offlineTerms.length} واژه کش شده)` 
+                        : `جستجو و یکپارچه‌سازی اصطلاحات تخصصی (${glossary.length} اصطلاح فعال)`}
                     </h3>
                   </div>
 
@@ -4839,59 +5308,126 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                   <div className="flex items-center gap-2">
                     <button 
                       onClick={handleExportGlossary}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200"
+                      disabled={isOfflineModeActive}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border ${
+                        isOfflineModeActive
+                          ? "bg-slate-50 text-slate-400 border-slate-100 cursor-not-allowed"
+                          : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200 cursor-pointer"
+                      }`}
                     >
                       <Download className="h-3.5 w-3.5" /> خروجی اکسل/CSV
                     </button>
                     <button 
                       onClick={() => alert("شبیه‌ساز بارگذاری مجدد اکسل: به دلیل الزامات تصدیق‌ امنیتی، فایل ابتدا فیلتر می‌شود.")}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary text-xs font-bold rounded-lg"
+                      disabled={isOfflineModeActive}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg ${
+                        isOfflineModeActive
+                          ? "bg-slate-50 text-slate-400 cursor-not-allowed"
+                          : "bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary cursor-pointer"
+                      }`}
                     >
                       <Upload className="h-3.5 w-3.5" /> بارگذاری گروهی واژه
                     </button>
                   </div>
                 </div>
 
-                {/* Sub search input with embedded micro-app sound controller */}
-                <div className="relative mb-4">
-                  <span className="absolute inset-y-0 right-3 flex items-center pr-1.5 pointer-events-none">
-                    <Search className="h-4 w-4 text-slate-400" />
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="جستجو در سر‌واژه‌ها، معادل‌های انگلیسی یا روسی، تگ‌های عمران... (یا از جستجوی صوتی استفاده کنید)"
-                    className="w-full pr-10 pl-14 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:bg-white focus:ring-1 focus:ring-brand-primary"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                  <div className="absolute inset-y-0 left-2.5 flex items-center gap-1.5">
-                    {searchTerm && (
+                {isOfflineModeActive && (
+                  <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl p-4 text-xs leading-relaxed flex items-start gap-3 animate-fade-in">
+                    <span className="text-xl shrink-0">⚠️</span>
+                    <div className="space-y-1">
+                      <p className="font-extrabold text-[12px] text-amber-950">حالت شبیه‌سازی آفلاین کارگاه ساختمانی فعال است</p>
+                      <p className="text-slate-600 text-[11px]">
+                        در حال حاضر ارتباط با دیتابیس مرکزی شرکت قطع شده است. کل واژه‌های زیر مستقیماً از حافظه لوکال مرورگر شما (پایگاه داده محلی <strong>IndexedDB</strong>) تغذیه می‌شوند و کاملاً بدون دسترسی به اینترنت کار می‌کنند. برای بازگشت به حالت آنلاین، دکمه «اتصال آنلاین به سرور» در پنل آیکون دیسک سخت سمت راست را کلیک کنید.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Search Input block: Conditional based on isOfflineModeActive */}
+                {isOfflineModeActive ? (
+                  <div className="relative mb-4 animate-fade-in">
+                    <span className="absolute inset-y-0 right-3 flex items-center pr-1.5 pointer-events-none">
+                      <HardDrive className="h-4 w-4 text-amber-600" />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="جستجو در پایگاه داده آفلاین کارگاه (جستجو بدون نیاز به اینترنت)..."
+                      className="w-full pr-10 pl-24 py-2.5 bg-amber-50/40 border border-amber-300 focus:border-amber-500 focus:ring-amber-500 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 text-slate-800 placeholder-slate-400"
+                      value={offlineSearchTerm}
+                      onChange={(e) => setOfflineSearchTerm(e.target.value)}
+                    />
+                    <div className="absolute inset-y-0 left-2.5 flex items-center gap-1.5">
+                      {offlineSearchTerm && (
+                        <button
+                          onClick={() => {
+                            setOfflineSearchTerm("");
+                            addSystemLog("عبارت جستجوی آفلاین واژه‌نامه تخصصی پاک شد.");
+                          }}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-200/60 transition-colors"
+                          title="پاک کردن"
+                          type="button"
+                        >
+                          <span className="text-sm font-black">×</span>
+                        </button>
+                      )}
+                      <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-2 py-0.5 rounded-md">
+                        آفلاین
+                      </span>
                       <button
-                        onClick={() => {
-                          setSearchTerm("");
-                          addSystemLog("عبارت جستجوی واژه‌نامه تخصصی پاک شد.");
-                        }}
-                        className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-200/60 transition-colors"
-                        title="پاک کردن"
+                        onClick={startGlossaryVoiceSearch}
+                        className={`p-1.5 rounded-lg transition-all flex items-center justify-center ${
+                          isGlossaryDictating 
+                            ? "bg-red-500 text-white animate-pulse scale-105" 
+                            : "bg-amber-500/15 hover:bg-amber-500/25 text-amber-700"
+                        }`}
+                        title="ابزار جستجوی صوتی تخصصی واژه (STT)"
                         type="button"
                       >
-                        <span className="text-sm font-black">×</span>
+                        <Mic className="h-3.5 w-3.5" />
                       </button>
-                    )}
-                    <button
-                      onClick={startGlossaryVoiceSearch}
-                      className={`p-1.5 rounded-lg transition-all flex items-center justify-center ${
-                        isGlossaryDictating 
-                          ? "bg-red-500 text-white animate-pulse scale-105" 
-                          : "bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary"
-                      }`}
-                      title="ابزار جستجوی صوتی تخصصی واژه (STT)"
-                      type="button"
-                    >
-                      <Mic className="h-3.5 w-3.5" />
-                    </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="relative mb-4">
+                    <span className="absolute inset-y-0 right-3 flex items-center pr-1.5 pointer-events-none">
+                      <Search className="h-4 w-4 text-slate-400" />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="جستجو در سر‌واژه‌ها، معادل‌های انگلیسی یا روسی، تگ‌های عمران... (یا از جستجوی صوتی استفاده کنید)"
+                      className="w-full pr-10 pl-14 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:bg-white focus:ring-1 focus:ring-brand-primary"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                    <div className="absolute inset-y-0 left-2.5 flex items-center gap-1.5">
+                      {searchTerm && (
+                        <button
+                          onClick={() => {
+                            setSearchTerm("");
+                            addSystemLog("عبارت جستجوی واژه‌نامه تخصصی پاک شد.");
+                          }}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-200/60 transition-colors"
+                          title="پاک کردن"
+                          type="button"
+                        >
+                          <span className="text-sm font-black">×</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={startGlossaryVoiceSearch}
+                        className={`p-1.5 rounded-lg transition-all flex items-center justify-center ${
+                          isGlossaryDictating 
+                            ? "bg-red-500 text-white animate-pulse scale-105" 
+                            : "bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary"
+                        }`}
+                        title="ابزار جستجوی صوتی تخصصی واژه (STT)"
+                        type="button"
+                      >
+                        <Mic className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Interactive Glossary STT Status Panel with Live Simulators */}
                 {isGlossaryDictating && (
@@ -4946,12 +5482,19 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
 
                 {/* Terms layout list container */}
                 <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-1">
-                  {glossary
-                    .filter(item => 
-                      item.term.includes(searchTerm) || 
-                      item.equivalentEn.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                      (item.equivalentRu && item.equivalentRu.toLowerCase().includes(searchTerm.toLowerCase()))
-                    )
+                  {(isOfflineModeActive ? offlineTerms : glossary)
+                    .filter(item => {
+                      const activeSearchText = isOfflineModeActive ? offlineSearchTerm : searchTerm;
+                      if (!activeSearchText) return true;
+                      
+                      const termMatch = item.term.includes(activeSearchText);
+                      const enMatch = item.equivalentEn.toLowerCase().includes(activeSearchText.toLowerCase());
+                      const ruMatch = item.equivalentRu && item.equivalentRu.toLowerCase().includes(activeSearchText.toLowerCase());
+                      const descMatch = item.definitionFa && item.definitionFa.includes(activeSearchText);
+                      const catMatch = item.category && item.category.includes(activeSearchText);
+                      
+                      return termMatch || enMatch || ruMatch || descMatch || catMatch;
+                    })
                     .map((item) => (
                       <div key={item.id} className="border border-slate-100 bg-slate-50 hover:bg-white rounded-xl p-4 transition-all hover:shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
                         
@@ -5095,6 +5638,390 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                   </div>
                 </div>
 
+              </div>
+
+              {/* SECTION: DETAILED REAL-TIME NETWORK LATENCY DASHBOARD */}
+              <div id="engine-latency-dashboard" className="bg-white rounded-3xl p-6 border border-slate-100 shadow-md transition-all duration-500">
+                <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-100 gap-4 mb-6">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2.5 bg-indigo-500 text-white rounded-xl shadow-inner animate-pulse">
+                      <Activity className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 flex-wrap text-right">
+                        <span>داشبورد زنده پایش کیفیت و تاخیر پورت‌های ترجمه (Translation Latency & QoS Dashboard)</span>
+                        <span className="bg-emerald-100 text-emerald-800 text-[9px] font-mono px-2 py-0.5 rounded-full font-bold">
+                          بروزرسانی ۲۵ ثانیه
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed text-right">
+                        مانیتورینگ همزمان زمان پاسخ‌دهی (Latency) و پایداری بسته‌های شبکه به تفکیک مسیرهای بین‌المللی و اینترانت داخلی شرکت عمران آذرستان
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 items-center">
+                    <button
+                      onClick={probeAllEngines}
+                      disabled={isProbingEngines}
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isProbingEngines ? "animate-spin" : ""}`} />
+                      <span>پایش مجدد همزمان همه موتورها</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Info and Smart Recommendation Alert Card */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-6">
+                  <div className="lg:col-span-8 bg-slate-50 border border-slate-100 rounded-2xl p-4 text-xs leading-relaxed text-slate-700 flex gap-3" dir="rtl">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl shrink-0 h-fit">
+                      <Server className="h-5 w-5" />
+                    </div>
+                    <div className="space-y-2 text-right">
+                      <h4 className="font-extrabold text-slate-900 text-[12px]">راهنمای مدیریت عملکرد در شرایط اختلال اینترنت</h4>
+                      <p>
+                        در پروژه‌های عمرانی پرسرعت، همواره سرعت و پایداری تبادل اطلاعات حیاتی است. سیستم ترجمه همزمان عمران آذرستان به دو کلاس کاری مجهز شده است:
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
+                          <span className="font-extrabold text-emerald-700 flex items-center gap-1 mb-1">
+                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+                            کلاس ۱: اینترانت بومی (موتورهای آفلاین)
+                          </span>
+                          <p className="text-[10px] text-slate-500">
+                            مدل‌های <strong className="text-slate-700 font-mono">Meta NLLB</strong>، <strong className="text-slate-700 font-mono">MarianMT</strong> و <strong className="text-slate-700 font-mono">Ollama</strong> به طور کامل روی پردازنده‌های گرافیکی سرور مرکزی مستقر شده‌اند. در صورت <strong>قطع کامل اینترنت کابل نوری</strong>، این موتورها با تاخیر شگفت‌انگیز <strong>زیر ۱۰ میلی‌ثانیه</strong> بدون وقفه کار می‌کنند.
+                          </p>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
+                          <span className="font-extrabold text-blue-700 flex items-center gap-1 mb-1">
+                            <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                            کلاس ۲: خدمات ابری بین‌المللی
+                          </span>
+                          <p className="text-[10px] text-slate-500">
+                            خدمات شرکت‌های <strong className="text-slate-700 font-mono">Google Cloud</strong> و <strong className="text-slate-700 font-mono">OpenAI</strong> کیفیت ترجمه بالایی دارند، اما زمان لود آن‌ها به <strong>پهنای باند گیت‌وی بین‌المللی کشور</strong> وابسته است و ممکن است در ساعات اوج ترافیک یا محدودیت شبکه دچار تاخیر شدید (بیش از ۵۰۰ میلی‌ثانیه) شوند.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Smart Recommendation Engine */}
+                  <div className="lg:col-span-4 bg-gradient-to-br from-indigo-50 to-purple-50/50 border border-indigo-100 rounded-2xl p-4 flex flex-col justify-between" dir="rtl">
+                    <div className="space-y-1.5 text-right">
+                      <span className="text-[10px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-100/50 px-2 py-0.5 rounded-md inline-block">
+                        🧠 پیشنهاد هوشمند هوش مصنوعی
+                      </span>
+                      {(() => {
+                        // Let's analyze which engines are currently responsive and find the fastest enabled one
+                        const enabledList = engines.filter(e => e.enabled);
+                        const latencyList = enabledList.map(e => ({
+                          id: e.id,
+                          name: e.name,
+                          latencyMs: engineLatencies[e.id]?.latencyMs || 9999,
+                          status: engineLatencies[e.id]?.status || "offline"
+                        })).filter(e => e.status !== "offline");
+
+                        const sorted = [...latencyList].sort((a, b) => a.latencyMs - b.latencyMs);
+                        const optimal = sorted[0];
+
+                        // Let's check if internet simulation is active or overall cloud latencies are slow
+                        const cloudSlow = latencyList.some(e => e.id === "GoogleCloud" && e.latencyMs > 300);
+                        const allOffline = latencyList.length === 0;
+
+                        if (allOffline) {
+                          return (
+                            <>
+                              <h4 className="text-xs font-black text-rose-900 mt-1">⚠️ هشدار: اینترنت بین‌المللی قطع است!</h4>
+                              <p className="text-[10px] text-rose-700 leading-relaxed">
+                                سیستم اتصالات ابری را ناموفق ارزیابی کرد. فورا به موتور پردازش آفلاین محلی <strong className="font-mono text-rose-900">Ollama</strong> سوئیچ نمایید تا اسناد بدون قطعی ترجمه شوند.
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setSelectedEngine("Ollama");
+                                  addSystemLog("⚡ با توصیه هوشمند، موتور فعال به Ollama (پردازش بومی آفلاین) منتقل گردید.");
+                                  setActiveTab("translate");
+                                }}
+                                className="w-full mt-3 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] font-black transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1"
+                              >
+                                <span>انتقال به موتور بومی آفلاین (Ollama)</span>
+                              </button>
+                            </>
+                          );
+                        }
+
+                        if (cloudSlow) {
+                          return (
+                            <>
+                              <h4 className="text-xs font-black text-amber-900 mt-1">⏳ ترافیک سنگین در گیت‌وی کشور</h4>
+                              <p className="text-[10px] text-amber-700 leading-relaxed">
+                                پایش زنده نشان می‌دهد زمان پینگ سرورهای ابری خارج از کشور به شدت بحرانی است. پیشنهاد می‌شود برای حفظ سرعت از مدل بومی <strong className="font-mono text-amber-900">Meta NLLB-200</strong> استفاده کنید.
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setSelectedEngine("NLLB-200");
+                                  addSystemLog("⚡ با توصیه هوشمند، موتور فعال به Meta NLLB-200 انتقال یافت.");
+                                  setActiveTab("translate");
+                                }}
+                                className="w-full mt-3 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-[10px] font-black transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1"
+                              >
+                                <span>انتخاب سریع Meta NLLB-200 (محلی)</span>
+                              </button>
+                            </>
+                          );
+                        }
+
+                        return (
+                          <>
+                            <h4 className="text-xs font-black text-emerald-950 mt-1">✅ وضعیت شبکه‌ایدآل و پایدار</h4>
+                            <p className="text-[10px] text-emerald-700 leading-relaxed">
+                              در حال حاضر موتور <strong className="font-mono text-emerald-900">{optimal?.name || "Google Cloud"}</strong> با تاخیر مطلوب <strong className="font-mono text-emerald-900">{optimal?.latencyMs || 120}ms</strong> سریع‌ترین سرویس فعال است.
+                            </p>
+                            <button
+                              onClick={() => {
+                                if (optimal) {
+                                  setSelectedEngine(optimal.id);
+                                  addSystemLog(`⚡ با توصیه هوشمند، موتور فعال به ${optimal.name} منتقل شد.`);
+                                  setActiveTab("translate");
+                                }
+                              }}
+                              className="w-full mt-3 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] font-black transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <span>استفاده از سریع‌ترین موتور فعال ({optimal?.id || "Google"})</span>
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Latency Bar Chart for Enabled Engines */}
+                <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4 mb-6">
+                  <h4 className="text-xs font-black text-slate-700 text-right mb-4 flex items-center gap-1.5 justify-end">
+                    <span>نمودار مقایسه‌ای تاخیر زنده موتورهای ترجمه (میلی‌ثانیه)</span>
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping"></span>
+                  </h4>
+
+                  <div className="h-44 w-full" dir="ltr">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={engines.map(e => ({
+                          name: e.id === "NLLB-200" ? "NLLB" : e.id === "MarianMT" ? "Marian" : e.id === "SeamlessM4T" ? "Seamless" : e.id === "GoogleCloud" ? "Google" : e.id === "OpenAI" ? "OpenAI" : e.id === "Ollama" ? "Ollama" : e.id === "DeepL" ? "DeepL" : e.id === "Azure" ? "Azure" : e.id,
+                          fullName: e.name,
+                          latency: engineLatencies[e.id]?.status === "offline" ? 0 : (engineLatencies[e.id]?.latencyMs || 0),
+                          status: engineLatencies[e.id]?.status || "offline"
+                        }))}
+                        margin={{ top: 10, right: 10, left: -25, bottom: 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                        <XAxis dataKey="name" stroke="#64748b" fontSize={10} fontWeight="bold" />
+                        <YAxis stroke="#64748b" fontSize={10} />
+                        <Tooltip
+                          contentStyle={{ background: "#0f172a", border: "none", borderRadius: "12px", color: "#f8fafc", direction: "rtl", textAlign: "right" }}
+                          formatter={(value: any, name: any, props: any) => {
+                            if (props.payload.status === "offline") return ["غیرفعال یا آفلاین", "وضعیت اتصال"];
+                            return [`${value} میلی‌ثانیه`, "تاخیر پاسخ‌دهی"];
+                          }}
+                        />
+                        <Bar dataKey="latency" radius={[6, 6, 0, 0]}>
+                          {engines.map((e, index) => {
+                            const latData = engineLatencies[e.id];
+                            let barColor = "#64748b"; // default grey
+                            if (latData) {
+                              if (latData.status === "offline") barColor = "#e2e8f0"; // very light
+                              else if (latData.latencyMs <= 50) barColor = "#10b981"; // fast green
+                              else if (latData.latencyMs <= 180) barColor = "#06b6d4"; // nice cyan
+                              else if (latData.latencyMs <= 350) barColor = "#f59e0b"; // warning amber
+                              else barColor = "#f43f5e"; // alert red
+                            }
+                            return <Cell key={`cell-${index}`} fill={barColor} />;
+                          })}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Detailed Grid of Engine Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" dir="rtl">
+                  {engines.map((eng) => {
+                    const lat = engineLatencies[eng.id] || { latencyMs: 0, status: "offline", details: "در انتظار مانیتورینگ...", route: "", timestamp: "", category: "local", history: [] };
+                    const isActive = selectedEngine === eng.id;
+                    const isComparisonActive = isComparisonMode && comparisonEngine === eng.id;
+
+                    const getStatusBadge = () => {
+                      switch (lat.status) {
+                        case "success":
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100">
+                              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+                              عالی ({lat.latencyMs}ms)
+                            </span>
+                          );
+                        case "warning":
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-100">
+                              <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
+                              تاخیر متوسط ({lat.latencyMs}ms)
+                            </span>
+                          );
+                        case "error":
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 border border-rose-100">
+                              <span className="w-1.5 h-1.5 bg-rose-500 rounded-full"></span>
+                              تاخیر بالا ({lat.latencyMs}ms)
+                            </span>
+                          );
+                        case "offline":
+                        default:
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200">
+                              غیرفعال / قطع
+                            </span>
+                          );
+                      }
+                    };
+
+                    const renderSparkline = (history: number[]) => {
+                      if (!history || history.length === 0) return <span className="text-[9px] text-slate-300 font-bold font-mono">---</span>;
+                      const max = Math.max(...history, 300); // normalize with at least 300ms as max height
+                      const points = history.map((val, idx) => {
+                        const x = (idx / (history.length - 1)) * 120;
+                        const y = 30 - (val / max) * 26; // map to 30px height, with some padding
+                        return `${x},${y}`;
+                      }).join(" ");
+
+                      return (
+                        <svg className="w-28 h-8 text-indigo-500 overflow-visible" viewBox="0 0 120 30" dir="ltr">
+                          <polyline
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            points={points}
+                          />
+                          {history.map((val, idx) => {
+                            const x = (idx / (history.length - 1)) * 120;
+                            const y = 30 - (val / max) * 26;
+                            const isLast = idx === history.length - 1;
+                            return (
+                              <circle
+                                key={idx}
+                                cx={x}
+                                cy={y}
+                                r={isLast ? 3.5 : 2}
+                                className={isLast ? "fill-indigo-600 animate-pulse text-indigo-400" : "fill-indigo-300"}
+                              />
+                            );
+                          })}
+                        </svg>
+                      );
+                    };
+
+                    return (
+                      <div
+                        key={eng.id}
+                        className={`rounded-2xl p-4 border transition-all duration-300 relative overflow-hidden flex flex-col justify-between ${
+                          isActive 
+                            ? "bg-indigo-50/40 border-indigo-500 shadow-md ring-2 ring-indigo-500/10" 
+                            : isComparisonActive
+                              ? "bg-purple-50/40 border-purple-500 shadow-md ring-2 ring-purple-500/10"
+                              : "bg-white border-slate-150 hover:border-slate-300 hover:shadow-sm"
+                        }`}
+                      >
+                        {/* Decorative background class highlight */}
+                        <div className={`absolute top-0 left-0 w-1.5 h-full ${
+                          eng.category === "open-source" ? "bg-emerald-500" : "bg-sky-500"
+                        }`} />
+
+                        <div>
+                          {/* Header of Card */}
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="text-right">
+                              <h4 className="text-xs font-black text-slate-800 leading-tight flex items-center gap-1.5 flex-wrap">
+                                <span>{eng.name}</span>
+                                {isActive && (
+                                  <span className="bg-indigo-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-md animate-fade-in">
+                                    موتور فعال اول
+                                  </span>
+                                )}
+                                {isComparisonActive && (
+                                  <span className="bg-purple-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-md animate-fade-in">
+                                    موتور مقایسه
+                                  </span>
+                                )}
+                              </h4>
+                              <span className="text-[9px] font-mono font-bold text-slate-400 block mt-1" dir="ltr">
+                                ID: {eng.id}
+                              </span>
+                            </div>
+                            <div className="shrink-0">
+                              {getStatusBadge()}
+                            </div>
+                          </div>
+
+                          {/* Category and Route */}
+                          <div className="flex flex-wrap gap-1.5 items-center my-2.5 text-[9px] font-bold">
+                            {eng.category === "open-source" ? (
+                              <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-100">
+                                🏢 شبکه اینترانت محلی عمران
+                              </span>
+                            ) : (
+                              <span className="bg-sky-50 text-sky-700 px-2 py-0.5 rounded border border-sky-100">
+                                🌐 گیت‌وی ابری بین‌المللی
+                              </span>
+                            )}
+                            <span className="bg-slate-50 text-slate-500 px-2 py-0.5 rounded border border-slate-100 font-mono" dir="ltr">
+                              {lat.route || "Offline / Direct"}
+                            </span>
+                          </div>
+
+                          {/* Details description */}
+                          <p className="text-[10px] text-slate-500 leading-relaxed text-right line-clamp-2 min-h-[30px] my-2">
+                            {lat.details}
+                          </p>
+                        </div>
+
+                        {/* Sparkline and Footer Action Actions */}
+                        <div className="border-t border-slate-100 pt-3 mt-2 flex items-center justify-between gap-2">
+                          <div className="flex flex-col text-left">
+                            <span className="text-[8px] text-slate-400 font-bold mb-0.5">پالس تاخیر‌های اخیر</span>
+                            {renderSparkline(lat.history)}
+                          </div>
+
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => probeSingleEngine(eng.id)}
+                              className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-indigo-600 rounded-lg border border-slate-200 transition-all cursor-pointer"
+                              title="سنجش انفرادی زمان پاسخ‌دهی"
+                              type="button"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setSelectedEngine(eng.id);
+                                addSystemLog(`⚡ موتور فعال به ${eng.name} تغییر یافت.`);
+                                setActiveTab("translate");
+                              }}
+                              disabled={lat.status === "offline" && eng.id !== "Ollama"}
+                              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black transition-all cursor-pointer ${
+                                isActive
+                                  ? "bg-indigo-600 text-white cursor-default"
+                                  : "bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 text-slate-700 hover:text-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                              }`}
+                            >
+                              {isActive ? "فعال است" : "انتخاب موتور"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* SECTION: INTEGRATED TRANSLATION RECORDS AUDIT HISTORY */}
@@ -6247,6 +7174,164 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                 type="button"
               >
                 تایید و شروع ترجمه
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Voice-to-Text Settings Modal */}
+      {showSttSettingsModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" dir="rtl">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl text-right animate-scale-up overflow-hidden">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-slate-900 to-indigo-950 p-6 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 rounded-xl">
+                  <Mic className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">راهنمای فعال‌سازی میکروفون و املا صوتی (STT)</h3>
+                  <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">برطرف کردن محدودیت امنیت (Secure Context) مرورگر در اجرا بر روی ویندوز سرور</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSttSettingsModal(false)}
+                className="text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 p-2 rounded-xl transition-colors cursor-pointer"
+                type="button"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+              <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-4 flex gap-3 text-xs leading-relaxed text-indigo-950">
+                <ShieldAlert className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-[12px] text-indigo-900">چرا دکمه میکروفون خطای امنیتی می‌دهد؟</h4>
+                  <p>
+                    مرورگرهای مدرن (نظیر Google Chrome و Microsoft Edge) به دلایل امنیتی، دسترسی به سخت‌افزار میکروفون (دستورات <strong className="font-mono">getUserMedia</strong> و <strong className="font-mono font-bold">SpeechRecognition</strong>) را فقط در بستر امن یعنی <strong>HTTPS</strong> یا روی دامنه <strong>localhost</strong> مجاز می‌دانند. در صورتی که این برنامه را بر روی ویندوز سرور داخلی و تحت پروتکل ناامن <strong>HTTP</strong> اجرا کنید، مرورگر به صورت خودکار دسترسی میکروفون را مسدود می‌سازد.
+                  </p>
+                </div>
+              </div>
+
+              {/* Tab Selector or Action Box */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Method 1: Chrome Flags (Recommended for quick local bypass) */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-md">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-indigo-700">
+                      <span className="bg-indigo-100 text-indigo-800 text-[10px] font-extrabold px-2 py-0.5 rounded">روش اول - آسان و سریع</span>
+                      <h4 className="font-extrabold text-xs">دور زدن با تنظیمات گوگل کروم</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      اگر برنامه را روی سرور لوکال یا شبکه محلی شرکت اجرا می‌کنید، می‌توانید با افزودن آدرس سرور به لیست استثناهای کروم، این محدودیت را به راحتی برطرف نمایید:
+                    </p>
+                    
+                    <ol className="text-[11px] text-slate-600 list-decimal list-inside space-y-2 pr-1">
+                      <li>
+                        آدرس زیر را کپی کرده و در تب جدیدی از کروم باز کنید:
+                        <div className="flex items-center gap-1.5 mt-1.5 bg-white border border-slate-200 p-1.5 rounded-lg">
+                          <code className="text-[9px] font-mono text-indigo-600 select-all break-all overflow-hidden text-left flex-1" dir="ltr">
+                            chrome://flags/#unsafely-treat-insecure-origin-as-secure
+                          </code>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText("chrome://flags/#unsafely-treat-insecure-origin-as-secure");
+                              alert("آدرس تنظیمات کروم کپی شد. آن را در تب جدید باز کنید.");
+                            }}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer"
+                            type="button"
+                          >
+                            کپی آدرس
+                          </button>
+                        </div>
+                      </li>
+                      <li>
+                        بخش <strong className="text-slate-800">Insecure origins treated as secure</strong> را به حالت <strong className="text-emerald-700 font-extrabold">Enabled</strong> تغییر دهید.
+                      </li>
+                      <li>
+                        آدرس و پورت اجرای برنامه را در کادر متنی مربوطه وارد نمایید:
+                        <div className="flex items-center gap-1.5 mt-1.5 bg-white border border-slate-200 p-1.5 rounded-lg">
+                          <code className="text-[10px] font-mono text-emerald-600 select-all break-all overflow-hidden text-left flex-1" dir="ltr">
+                            {window.location.origin || "http://[SERVER_IP]:3000"}
+                          </code>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(window.location.origin || "http://localhost:3000");
+                              alert("آدرس سرور شما کپی شد. آن را در کادر متنی فلگ کروم وارد کنید.");
+                            }}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer"
+                            type="button"
+                          >
+                            کپی آدرس سرور
+                          </button>
+                        </div>
+                        <span className="text-[9px] text-slate-400 mt-1 block">
+                          (توجه داشته باشید که از نوشتن کاراکترهای اضافی در انتهای آدرس خودداری کنید)
+                        </span>
+                      </li>
+                      <li>
+                        بر روی دکمه آبی‌رنگ <strong className="text-slate-800 font-bold">Relaunch</strong> در پایین صفحه کروم کلیک کنید تا مرورگر مجدداً راه‌اندازی شده و میکروفون فعال شود.
+                      </li>
+                    </ol>
+                  </div>
+                </div>
+
+                {/* Method 2: Configure HTTPS / SSL */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-md">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-emerald-700">
+                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded">روش دوم - استاندارد و اصولی</span>
+                      <h4 className="font-extrabold text-xs">فعال‌سازی پروتکل امن HTTPS</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      مناسب‌ترین روش برای استفاده دائم و بدون نیاز به دستکاری سیستم کاربران، پیکربندی گواهی امنیتی SSL بر روی سرور است:
+                    </p>
+
+                    <div className="space-y-3 text-[11px] text-slate-600">
+                      <div className="bg-white p-2.5 rounded-xl border border-slate-150">
+                        <span className="font-extrabold text-slate-800 block mb-1">۱. راه‌اندازی با IIS یا Nginx روی ویندوز سرور</span>
+                        <p className="text-[10px] leading-relaxed text-slate-500">
+                          یک Reverse Proxy با استفاده از IIS (ماژول ARR) یا Nginx پیکربندی کنید که ترافیک ناامن پورت <strong className="font-mono font-bold">3000</strong> برنامه را دریافت کرده و با افزودن گواهی SSL، روی پورت استاندارد <strong className="font-mono font-bold">443</strong> به صورت <strong className="font-extrabold text-emerald-700">HTTPS</strong> به کاربران ارائه دهد.
+                        </p>
+                      </div>
+
+                      <div className="bg-white p-2.5 rounded-xl border border-slate-150">
+                        <span className="font-extrabold text-slate-800 block mb-1">۲. دریافت گواهی SSL رایگان یا سازمانی</span>
+                        <p className="text-[10px] leading-relaxed text-slate-500">
+                          می‌توانید از گواهی‌های رایگان صادرشده توسط سرویس‌هایی همچون <strong className="font-mono font-bold">Let's Encrypt</strong> استفاده کنید و یا در صورت شبکه بسته شرکتی، از دپارتمان فناوری اطلاعات بخواهید گواهی تحت دامنه بومی (Self-Signed یا Enterprise CA) برای سرور آذرستان صادر کنند.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Troubleshooting Quick Tips */}
+              <div className="bg-slate-50 border border-slate-150 rounded-2xl p-4">
+                <h5 className="text-[11px] font-extrabold text-slate-800 mb-2 flex items-center gap-1.5">
+                  <CheckCircle className="h-4 w-4 text-emerald-600" />
+                  <span>بررسی نهایی وضعیت اتصالات</span>
+                </h5>
+                <p className="text-[10px] text-slate-600 leading-relaxed">
+                  پس از انجام یکی از دو روش فوق، مجدداً وارد برنامه شده و در بخش ترجمه بر روی دکمه <strong>املا گفتاری (STT)</strong> کلیک کنید. مرورگر کادر کوچکی برای <strong>مجوز دسترسی به میکروفون (Allow Microphone Access)</strong> نشان خواهد داد؛ با انتخاب گزینه Allow، سیستم صوت‌سنج فعال شده و صدای ورودی شما مستقیماً به متن روان تبدیل خواهد شد.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t border-slate-150 flex justify-between items-center">
+              <span className="text-[10px] text-slate-400 font-bold font-mono">
+                Version: 1.2.4 (QoS Enabled)
+              </span>
+              <button
+                onClick={() => setShowSttSettingsModal(false)}
+                className="px-5 py-2 text-xs font-black text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all cursor-pointer shadow-md"
+                type="button"
+              >
+                متوجه شدم و بستن راهنما
               </button>
             </div>
           </div>
