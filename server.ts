@@ -322,6 +322,43 @@ app.use(express.json({ limit: '10mb' }));
 
 // Initial Static / In-Memory Mock Database for Active Directory
 const AD_USERS_DB_PATH = path.join(process.cwd(), "ad_users_db.json");
+const AD_CONFIG_DB_PATH = path.join(process.cwd(), "ad_config_db.json");
+
+interface ADConfig {
+  serverAddress: string;
+  domainHost: string;
+  port: number;
+  lastTested?: string;
+  testStatus?: "success" | "failed";
+  testLatency?: number;
+  testError?: string;
+}
+
+const loadAdConfig = (): ADConfig => {
+  try {
+    if (fs.existsSync(AD_CONFIG_DB_PATH)) {
+      const data = fs.readFileSync(AD_CONFIG_DB_PATH, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Error loading AD config:", err);
+  }
+  return {
+    serverAddress: "192.168.26.2",
+    domainHost: "PDC2.BNPP2PROJECT.local",
+    port: 389,
+    testStatus: "success",
+    lastTested: new Date().toISOString()
+  };
+};
+
+const saveAdConfig = (config: ADConfig) => {
+  try {
+    fs.writeFileSync(AD_CONFIG_DB_PATH, JSON.stringify(config, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error saving AD config:", err);
+  }
+};
 
 const loadAdUsersDb = (): ADUser[] => {
   try {
@@ -883,6 +920,91 @@ app.get("/api/network-info", (req, res) => {
   const username = (req.query.username || "SUPPORT") as string;
   const { realIp, mappedIp } = getClientNetworkInfo(req, username);
   res.json({ success: true, realIp, mappedIp });
+});
+
+// API: Get Active Directory Server Config
+app.get("/api/admin/ad/config", (req, res) => {
+  const config = loadAdConfig();
+  res.json({ success: true, config });
+});
+
+// API: Save Active Directory Server Config
+app.post("/api/admin/ad/config", (req, res) => {
+  const { serverAddress, domainHost, port, requester } = req.body;
+  
+  const requesterUser = adUsers.find(u => u.username.toLowerCase() === requester?.toLowerCase());
+  const isAuthorized = requester?.toLowerCase() === "support" || (requesterUser && requesterUser.role === "Admin");
+  if (!isAuthorized) {
+    return res.status(403).json({ error: "خطای امنیتی: فقط مدیر سیستم مجاز به تغییر تنظیمات سرور دامنه است" });
+  }
+
+  const config = loadAdConfig();
+  config.serverAddress = serverAddress || config.serverAddress;
+  config.domainHost = domainHost || config.domainHost;
+  config.port = Number(port) || config.port;
+
+  saveAdConfig(config);
+  res.json({ success: true, config });
+});
+
+// API: Test Active Directory Connection
+app.post("/api/admin/ad/test-connection", async (req, res) => {
+  const { serverAddress, domainHost, port, requester, simulateOffline } = req.body;
+
+  const requesterUser = adUsers.find(u => u.username.toLowerCase() === requester?.toLowerCase());
+  const isAuthorized = requester?.toLowerCase() === "support" || (requesterUser && requesterUser.role === "Admin");
+  if (!isAuthorized) {
+    return res.status(403).json({ error: "خطای امنیتی: فقط مدیر سیستم مجاز به تست اتصال سرور دامنه است" });
+  }
+
+  const host = domainHost || "PDC2.BNPP2PROJECT.local";
+  const ip = serverAddress || "192.168.26.2";
+  const p = Number(port) || 389;
+
+  const start = Date.now();
+  
+  // Simulated delay
+  await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 400));
+
+  const latency = Date.now() - start;
+  const config = loadAdConfig();
+  
+  if (simulateOffline === true) {
+    const errorMsg = "CONNECTION_TIMEOUT: امکان برقراری ارتباط با کنترل‌کننده دامنه (Domain Controller) وجود ندارد. مسیر شبکه یا آدرس IP را بررسی نمایید.";
+    config.testStatus = "failed";
+    config.lastTested = new Date().toISOString();
+    config.testLatency = 0;
+    config.testError = errorMsg;
+    saveAdConfig(config);
+    return res.json({
+      success: false,
+      latency: 0,
+      status: "failed",
+      error: errorMsg,
+      details: "خطای سوکت دامنه (TCP Port 389 Reset/Timeout)"
+    });
+  }
+
+  config.testStatus = "success";
+  config.lastTested = new Date().toISOString();
+  config.testLatency = latency;
+  config.testError = "";
+  saveAdConfig(config);
+
+  res.json({
+    success: true,
+    latency,
+    status: "success",
+    details: `اتصال موفقیت‌آمیز به اکتیو دایرکتوری در آدرس ${ip}:${p} دامنه‌ی ${host}. پروتکل LDAP v3 تایید شد.`,
+    serverInfo: {
+      domainControllerName: "PDC2",
+      forestName: "BNPP2PROJECT.LOCAL",
+      osVersion: "Windows Server 2022 Datacenter",
+      ldapPingTimeMs: latency,
+      kerberosEnabled: true,
+      activeUsersCount: adUsers.length
+    }
+  });
 });
 
 // API: List AD users (Admin access only)

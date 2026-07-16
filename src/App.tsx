@@ -40,7 +40,8 @@ import {
   Moon,
   Eye,
   LogOut,
-  Power
+  Power,
+  Key
 } from "lucide-react";
 import { 
   ResponsiveContainer, 
@@ -146,6 +147,7 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
 
   // Active Directory Heartbeat
   useEffect(() => {
@@ -2999,6 +3001,19 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl text-xs px-3.5 py-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-100 font-bold text-left placeholder:text-slate-600"
                   dir="ltr"
                 />
+                <div className="flex justify-between items-center mt-2 px-1 text-[10px]">
+                  <span className="text-slate-500 font-mono">Domain: BNPP2PROJECT</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgotPasswordModal(true);
+                      addSystemLog("کاربر درخواست راهنمای فراموشی کلمه عبور شبکه را ارسال کرد.");
+                    }}
+                    className="text-indigo-400 hover:text-indigo-300 font-extrabold transition-all hover:underline cursor-pointer"
+                  >
+                    فراموشی رمز عبور؟
+                  </button>
+                </div>
               </div>
 
               <div className="text-[10px] text-slate-400 font-semibold leading-relaxed bg-slate-900/40 p-3 rounded-lg border border-slate-700/50">
@@ -3024,65 +3039,64 @@ Interim Payment Certificates (IPCs) shall be compiled based on joint measurement
               </button>
             </form>
 
-            {/* Quick Login Test Accounts Helper */}
-            <div className="mt-5 pt-4 border-t border-slate-700/60 text-right">
-              <span className="text-[10px] text-slate-400 font-bold block mb-2">🔑 کاربران پیش‌فرض جهت تست سریع سامانه (یک کلیک برای پر شدن فرم):</span>
-              <div className="grid grid-cols-2 gap-2 text-[10px]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginUsername("SUPPORT");
-                    setLoginPassword("Aa8796sS");
-                    addSystemLog("انتخاب خودکار اکانت راهبر سیستم (SUPPORT)");
-                  }}
-                  className="p-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg text-slate-300 text-right transition-all cursor-pointer w-full"
-                >
-                  <div className="font-bold text-slate-100">مدیر سیستم (SUPPORT)</div>
-                  <div className="text-[8px] text-slate-400 font-mono">User: SUPPORT / Pass: Aa8796sS</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginUsername("m.esmaeili.admin");
-                    setLoginPassword("123456");
-                    addSystemLog("انتخاب خودکار اکانت مهدی اسماعیلی (مدیر پروژه)");
-                  }}
-                  className="p-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg text-slate-300 text-right transition-all cursor-pointer w-full"
-                >
-                  <div className="font-bold text-slate-100">مهدی اسماعیلی (Admin)</div>
-                  <div className="text-[8px] text-slate-400 font-mono">کاربر ارشد / دسترسی کامل</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginUsername("m.esmaeili.trans");
-                    setLoginPassword("123456");
-                    addSystemLog("انتخاب خودکار اکانت مترجم ارشد");
-                  }}
-                  className="p-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg text-slate-300 text-right transition-all cursor-pointer w-full"
-                >
-                  <div className="font-bold text-slate-100">مترجم ارشد (Translator)</div>
-                  <div className="text-[8px] text-slate-400 font-mono">کاربر مترجم / ویرایش واژه</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginUsername("m.esmaeili.user");
-                    setLoginPassword("123456");
-                    addSystemLog("انتخاب خودکار اکانت کاربر کارگاه پرند");
-                  }}
-                  className="p-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg text-slate-300 text-right transition-all cursor-pointer w-full"
-                >
-                  <div className="font-bold text-slate-100">کاربر کارگاه پرند (User)</div>
-                  <div className="text-[8px] text-slate-400 font-mono">سطح دسترسی عادی کارگاهی</div>
-                </button>
-              </div>
-            </div>
+
 
             <div className="mt-6 pt-5 border-t border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500 font-mono">
               <span>Domain: BNPP2PROJECT.LOCAL</span>
               <span>Secure Kerberos Auth v3</span>
             </div>
+
+            {/* Forgot Password Modal Overlay */}
+            {showForgotPasswordModal && (
+              <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all animate-fade-in" id="forgot-password-modal">
+                <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl text-right transition-all animate-scale-up">
+                  <div className="flex items-center gap-2.5 pb-4 border-b border-slate-800 text-indigo-400">
+                    <Key className="h-5 w-5" />
+                    <h3 className="text-xs font-black text-white">راهنمای بازیابی رمز عبور اکتیو دایرکتوری</h3>
+                  </div>
+                  
+                  <div className="mt-4 space-y-3.5 text-[11px] leading-relaxed text-slate-300">
+                    <p>
+                      رمز عبور شما، همان کلمه عبور مورد استفاده برای ورود به رایانه سازمانی (Domain Account) در شرکت عمران آذرستان است.
+                    </p>
+                    
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-amber-300 text-[10.5px]">
+                      ⚠️ <strong>سیاست امنیتی شبکه:</strong> به دلیل یکپارچگی سیستم‌های امنیتی شرکت، امکان تغییر خودکار یا ریست رمز عبور در این سامانه بصورت مستقیم وجود ندارد.
+                    </div>
+                    
+                    <div className="space-y-2 bg-slate-950/50 p-3 rounded-xl border border-slate-800 text-right">
+                      <span className="font-bold text-white block pb-1 border-b border-slate-800/60 text-slate-400">📞 راه‌های تماس با تیم فناوری اطلاعات (IT):</span>
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>شماره تماس داخلی (دفتر مرکزی):</span>
+                        <span className="font-mono text-indigo-400">۱۱۹ / ۱۲۰</span>
+                      </div>
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>پشتیبانی شبکه‌ و دامنه:</span>
+                        <span className="font-mono text-indigo-400">۰۷۷-۳۱۱۱۷۳۳۶</span>
+                      </div>
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>ایمیل واحد فناوری اطلاعات و ارتباطات:</span>
+                        <span className="font-mono text-indigo-400">ict.boushehr@azarestan.com</span>
+                      </div>
+                    </div>
+                    
+                    <p className="text-[10px] text-slate-400">
+                      پس از تماس با واحد IT، رمز عبور موقت برای شما صادر خواهد شد که پس از اولین ورود به رایانه سازمانی ملزم به تغییر آن خواهید بود.
+                    </p>
+                  </div>
+                  
+                  <div className="mt-5 pt-3 border-t border-slate-800 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotPasswordModal(false)}
+                      className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10.5px] font-black rounded-lg transition-all cursor-pointer w-full text-center"
+                    >
+                      متوجه شدم و بستن
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (

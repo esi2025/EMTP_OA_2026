@@ -25,7 +25,9 @@ import {
   LogOut,
   Eye,
   EyeOff,
-  Save
+  Save,
+  Radio,
+  XCircle
 } from "lucide-react";
 
 import { ADUser } from "../types";
@@ -40,6 +42,92 @@ export function AdminSetupGuide({ currentUser }: { currentUser: ADUser }) {
   // Active Directory Users state
   const [adUsers, setAdUsers] = useState<any[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+
+  // Active Directory Configuration & Testing States
+  const [adServerAddress, setAdServerAddress] = useState("192.168.26.2");
+  const [adDomainHost, setAdDomainHost] = useState("PDC2.BNPP2PROJECT.local");
+  const [adPort, setAdPort] = useState(389);
+  const [isFetchingAdConfig, setIsFetchingAdConfig] = useState(false);
+  const [isSavingAdConfig, setIsSavingAdConfig] = useState(false);
+  const [isTestingAd, setIsTestingAd] = useState(false);
+  const [adTestResult, setAdTestResult] = useState<any>(null);
+  const [adSimulateOffline, setAdSimulateOffline] = useState(false);
+
+  const fetchAdConfig = async () => {
+    setIsFetchingAdConfig(true);
+    try {
+      const res = await fetch("/api/admin/ad/config");
+      const data = await res.json();
+      if (data.success && data.config) {
+        setAdServerAddress(data.config.serverAddress || "192.168.26.2");
+        setAdDomainHost(data.config.domainHost || "PDC2.BNPP2PROJECT.local");
+        setAdPort(data.config.port || 389);
+      }
+    } catch (err) {
+      console.error("Error fetching AD config:", err);
+    } finally {
+      setIsFetchingAdConfig(false);
+    }
+  };
+
+  const handleUpdateAdConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingAdConfig(true);
+    try {
+      const res = await fetch("/api/admin/ad/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requester: currentUser?.username,
+          serverAddress: adServerAddress,
+          domainHost: adDomainHost,
+          port: adPort
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return true;
+      } else {
+        alert(data.error || "خطا در ذخیره‌سازی تنظیمات سرور دامنه");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("خطای ارتباط با سرور");
+    } finally {
+      setIsSavingAdConfig(false);
+    }
+    return false;
+  };
+
+  const handleTestAdConnection = async () => {
+    setIsTestingAd(true);
+    setAdTestResult(null);
+    try {
+      // First save configuration to ensure we test current values
+      await handleUpdateAdConfig();
+
+      const res = await fetch("/api/admin/ad/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requester: currentUser?.username,
+          serverAddress: adServerAddress,
+          domainHost: adDomainHost,
+          port: adPort,
+          simulateOffline: adSimulateOffline
+        })
+      });
+      const data = await res.json();
+      setAdTestResult(data);
+    } catch (err: any) {
+      setAdTestResult({
+        success: false,
+        error: "اتصال فیزیکی با شبکه در این پورت با مشکل مواجه شده است. خطای هندشیک LDAP."
+      });
+    } finally {
+      setIsTestingAd(false);
+    }
+  };
 
   // Ollama Offline AI Management States
   const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
@@ -409,6 +497,7 @@ export function AdminSetupGuide({ currentUser }: { currentUser: ADUser }) {
     fetchProjects();
     fetchSessions();
     fetchAdUsers();
+    fetchAdConfig();
     fetchStatsSummary();
     
     // Poll sessions, users, and stats every 10 seconds to keep track of active statuses
@@ -718,6 +807,137 @@ export function AdminSetupGuide({ currentUser }: { currentUser: ADUser }) {
               </div>
             </div>
  
+            {/* Active Directory Server Configuration & Connection Tester */}
+            {canEditUsers && (
+              <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 mb-5 text-right space-y-4 shadow-sm animate-fade-in" id="ad-server-config-card">
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2 text-indigo-700 font-black text-xs">
+                    <Server className="h-4 w-4 text-indigo-600" />
+                    <span>تنظیمات و تست اتصال کنترل‌کننده دامنه (Active Directory Domain Controller)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-500 font-bold">
+                      <input
+                        type="checkbox"
+                        checked={adSimulateOffline}
+                        onChange={(e) => setAdSimulateOffline(e.target.checked)}
+                        className="h-3.5 w-3.5 text-red-600 focus:ring-red-500 border-slate-300 rounded cursor-pointer"
+                      />
+                      <span>شبیه‌سازی خطای قطع ارتباط سرور AD</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 font-bold">آدرس سرور دومین (IP):</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="192.168.26.2"
+                      value={adServerAddress}
+                      onChange={(e) => setAdServerAddress(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-left font-bold focus:bg-white focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 font-bold">هاست دومین (Domain Host):</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="PDC2.BNPP2PROJECT.local"
+                      value={adDomainHost}
+                      onChange={(e) => setAdDomainHost(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-left font-bold focus:bg-white focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 font-bold">پورت LDAP (پیش‌فرض ۳۸۹):</label>
+                    <input
+                      type="number"
+                      required
+                      placeholder="389"
+                      value={adPort}
+                      onChange={(e) => setAdPort(Number(e.target.value))}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-left font-bold focus:bg-white focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex items-end gap-2 pt-2 sm:pt-0">
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateAdConfig()}
+                      disabled={isSavingAdConfig}
+                      className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-extrabold px-3 py-2.5 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer border border-slate-200"
+                    >
+                      <Save className="h-3.5 w-3.5 text-slate-500" />
+                      <span>{isSavingAdConfig ? "در حال ذخیره..." : "ذخیره تغییرات"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestAdConnection}
+                      disabled={isTestingAd}
+                      className="flex-[1.5] bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black px-3 py-2.5 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      {isTestingAd ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          <span>درحال تست ارتباط...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Radio className="h-3.5 w-3.5 text-indigo-200 animate-pulse" />
+                          <span>تست ارتباط اکتیودایرکتوری</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Connection Test Results */}
+                {adTestResult && (
+                  <div className={`rounded-xl p-3.5 border transition-all animate-fade-in ${
+                    adTestResult.success 
+                      ? "bg-emerald-50/50 border-emerald-200 text-emerald-800" 
+                      : "bg-rose-50/50 border-rose-200 text-rose-800"
+                  }`}>
+                    {adTestResult.success ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 font-black text-xs">
+                          <CheckCircle className="h-4 w-4 text-emerald-600" />
+                          <span>ارتباط با سرویس دایرکتوری با موفقیت تایید شد (پینگ موفق)</span>
+                          <span className="mr-auto bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold">
+                            تأخیر: {adTestResult.latency}ms
+                          </span>
+                        </div>
+                        <p className="text-[10.5px] leading-relaxed text-slate-600 font-medium">{adTestResult.details}</p>
+                        {adTestResult.serverInfo && (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-emerald-100 mt-2 text-[10px] font-mono text-slate-500">
+                            <div><strong className="text-slate-700">سرور دامنه (DC):</strong> {adTestResult.serverInfo.domainControllerName}</div>
+                            <div><strong className="text-slate-700">فارست (Forest):</strong> {adTestResult.serverInfo.forestName}</div>
+                            <div><strong className="text-slate-700">سیستم عامل سرور:</strong> {adTestResult.serverInfo.osVersion}</div>
+                            <div><strong className="text-slate-700">وضعیت کربروس:</strong> {adTestResult.serverInfo.kerberosEnabled ? "فعال (Kerberos v5)" : "غیرفعال"}</div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 font-black text-xs text-rose-700">
+                          <XCircle className="h-4 w-4 text-rose-600" />
+                          <span>شکست در برقراری ارتباط با سرویس اکتیودایرکتوری</span>
+                        </div>
+                        <p className="text-[10.5px] font-mono leading-relaxed text-rose-800 bg-white/60 p-2 rounded-lg border border-rose-100" dir="ltr">
+                          {adTestResult.error}
+                        </p>
+                        <p className="text-[10px] leading-relaxed text-slate-500 font-bold">
+                          💡 راهنما: بررسی کنید که آیا آدرس آی‌پی وارد شده با کنترل‌کننده دامنه واقعی شما همخوانی دارد یا خیر. همچنین مطمئن شوید پورت {adPort} (LDAP) بر روی کنترل‌کننده دامنه آزاد بوده و دسترسی به آن توسط فایروال مسدود نشده است.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Create New User Form (SUPPORT / Admin ONLY) */}
             {canEditUsers && showAddForm && (
               <form onSubmit={handleCreateUser} className="bg-white border border-indigo-100 rounded-xl p-4 mb-5 text-right space-y-4 shadow-md animate-fade-in">
